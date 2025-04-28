@@ -1,16 +1,18 @@
-﻿using System; // Required for Exception, IntPtr etc.
-using System.Collections.Generic; // Required for List
-using System.Numerics; // Required for Vector2
+﻿using System;
+using System.Numerics;
+using System.Collections.Generic; // Added for List
 
 namespace Cherris;
 
-public class WindowNode : Node
+public class WindowNode : Node2D
 {
-    private SecondaryWindow? secondaryWindow;
+    // Make secondaryWindow protected so ModalWindowNode can assign to it
+    protected SecondaryWindow? secondaryWindow;
     private string windowTitle = "Cherris Window";
     private int windowWidth = 640;
     private int windowHeight = 480;
-    private bool isQueuedForFree = false;
+    // Make isQueuedForFree protected so ModalWindowNode can check it if needed
+    protected bool isQueuedForFree = false;
 
     public string Title
     {
@@ -45,6 +47,7 @@ public class WindowNode : Node
         }
     }
 
+
     public override void Make()
     {
         base.Make();
@@ -62,6 +65,9 @@ public class WindowNode : Node
         }
     }
 
+    // Make InitializeWindow virtual if ModalWindowNode needs to override
+    // or change its behavior significantly, otherwise protected might be fine.
+    // For now, ModalWindowNode bypasses it in Make(), so it doesn't strictly matter.
     private void InitializeWindow()
     {
         if (secondaryWindow is not null)
@@ -72,7 +78,8 @@ public class WindowNode : Node
 
         try
         {
-            secondaryWindow = new SecondaryWindow(Title, Width, Height, this);
+
+            secondaryWindow = new SecondaryWindow(Title, this.Width, this.Height, this);
 
             if (!secondaryWindow.TryCreateWindow())
             {
@@ -107,13 +114,14 @@ public class WindowNode : Node
     }
 
 
-    private void FreeInternal()
+    // Change access modifier to protected
+    protected virtual void FreeInternal()
     {
         Log.Info($"Freeing WindowNode '{Name}' and its associated window.");
         secondaryWindow?.Close();
 
         secondaryWindow = null;
-        base.Free();
+        base.Free(); // Call Node.Free() to remove from parent etc.
     }
 
 
@@ -148,6 +156,7 @@ public class WindowNode : Node
 
         if (node is VisualItem { Visible: true } visualItem)
         {
+
             visualItem.Draw(context);
         }
 

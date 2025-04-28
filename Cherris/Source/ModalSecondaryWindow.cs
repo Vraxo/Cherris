@@ -16,7 +16,11 @@ public class ModalSecondaryWindow : SecondaryWindow
     public override bool TryCreateWindow(IntPtr ownerHwndOverride = default, uint? styleOverride = null)
     {
 
-        uint defaultModalStyle = NativeMethods.WS_POPUP | NativeMethods.WS_CAPTION | NativeMethods.WS_SYSMENU | NativeMethods.WS_VISIBLE;
+        uint defaultModalStyle = NativeMethods.WS_POPUP
+                               | NativeMethods.WS_CAPTION
+                               | NativeMethods.WS_SYSMENU
+                               | NativeMethods.WS_VISIBLE
+                               | NativeMethods.WS_THICKFRAME;
 
 
         return base.TryCreateWindow(ownerHwnd, styleOverride ?? defaultModalStyle);
