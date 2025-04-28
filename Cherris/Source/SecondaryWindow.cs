@@ -1,6 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Numerics;
+﻿using System; // Required for Action, ArgumentNullException etc.
+using System.Collections.Generic; // Required for HashSet, Dictionary etc.
+using System.Numerics; // Required for Vector2
 
 namespace Cherris;
 
@@ -10,9 +10,9 @@ public class SecondaryWindow : Direct2DAppWindow
     private readonly HashSet<KeyCode> currentKeysDown = [];
     private readonly HashSet<MouseButtonCode> currentMouseButtonsDown = [];
     private Vector2 currentMousePosition = Vector2.Zero;
-    private float currentMouseWheelDelta = 0f; // Added for local wheel state
-    private readonly HashSet<KeyCode> previousKeysDown = []; // Added for local pressed/released
-    private readonly HashSet<MouseButtonCode> previousMouseButtonsDown = []; // Added for local pressed/released
+    private float currentMouseWheelDelta = 0f;
+    private readonly HashSet<KeyCode> previousKeysDown = [];
+    private readonly HashSet<MouseButtonCode> previousMouseButtonsDown = [];
 
     public SecondaryWindow(string title, int width, int height, WindowNode owner)
         : base(title, width, height)
@@ -32,7 +32,7 @@ public class SecondaryWindow : Direct2DAppWindow
         Log.Info($"SecondaryWindow '{Title}' OnClose called.");
 
 
-        ownerNode?.QueueFree(); // Request the node be freed
+        ownerNode?.QueueFree();
 
 
         return base.OnClose();

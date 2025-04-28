@@ -80,7 +80,21 @@ public class Button : Control
 
     private void HandleKeyboardInput()
     {
-        if (!Focused || !Input.IsKeyPressed(KeyCode.Enter))
+
+
+        bool enterPressed;
+        var owningWindowNode = GetOwningWindowNode();
+
+        if (owningWindowNode != null)
+        {
+            enterPressed = owningWindowNode.IsLocalKeyPressed(KeyCode.Enter);
+        }
+        else
+        {
+            enterPressed = Input.IsKeyPressed(KeyCode.Enter);
+        }
+
+        if (!Focused || !enterPressed)
         {
             return;
         }
@@ -131,8 +145,21 @@ public class Button : Control
     {
         bool invoked = false;
         bool mouseOver = IsMouseOver();
-        bool buttonPressedThisFrame = Input.IsMouseButtonPressed(button);
-        bool buttonReleasedThisFrame = Input.IsMouseButtonReleased(button);
+        bool buttonPressedThisFrame;
+        bool buttonReleasedThisFrame;
+
+        var owningWindowNode = GetOwningWindowNode();
+
+        if (owningWindowNode != null)
+        {
+            buttonPressedThisFrame = owningWindowNode.IsLocalMouseButtonPressed(button);
+            buttonReleasedThisFrame = owningWindowNode.IsLocalMouseButtonReleased(button);
+        }
+        else
+        {
+            buttonPressedThisFrame = Input.IsMouseButtonPressed(button);
+            buttonReleasedThisFrame = Input.IsMouseButtonReleased(button);
+        }
 
 
         if (mouseOver && buttonPressedThisFrame && !Disabled)
@@ -160,7 +187,23 @@ public class Button : Control
                     invoked = true;
                 }
 
-                pressedState = false;
+
+                if (!StayPressed)
+                {
+                    pressedState = false;
+                }
+                else if (!mouseOver && mode == ActionMode.Release)
+                {
+
+                    pressedState = false;
+                }
+                else if (mode == ActionMode.Press && !mouseOver)
+                {
+
+
+                    pressedState = false;
+                }
+
             }
         }
 
@@ -208,8 +251,21 @@ public class Button : Control
             return;
         }
 
-        bool isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Left);
-        bool isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Right);
+        bool isLeftDown;
+        bool isRightDown;
+        var owningWindowNode = GetOwningWindowNode();
+
+        if (owningWindowNode != null)
+        {
+            isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && owningWindowNode.IsLocalMouseButtonDown(MouseButtonCode.Left);
+            isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && owningWindowNode.IsLocalMouseButtonDown(MouseButtonCode.Right);
+        }
+        else
+        {
+            isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Left);
+            isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Right);
+        }
+
         bool isPhysicallyHeldDown = isMouseOver && (isLeftDown || isRightDown);
 
 
@@ -247,6 +303,7 @@ public class Button : Control
         if (!Visible) return;
 
         DrawBackground(context);
+
 
         DrawText(context);
     }

@@ -1,5 +1,6 @@
-﻿using System;
-using System.Numerics;
+﻿using System; // Required for Exception, IntPtr etc.
+using System.Collections.Generic; // Required for List
+using System.Numerics; // Required for Vector2
 
 namespace Cherris;
 
@@ -18,7 +19,7 @@ public class WindowNode : Node
         {
             if (windowTitle == value) return;
             windowTitle = value;
-            // TODO: Add method to update existing window title if needed
+
         }
     }
 
@@ -29,7 +30,7 @@ public class WindowNode : Node
         {
             if (windowWidth == value) return;
             windowWidth = value;
-            // TODO: Add method to resize existing window if needed
+
         }
     }
 
@@ -40,7 +41,7 @@ public class WindowNode : Node
         {
             if (windowHeight == value) return;
             windowHeight = value;
-            // TODO: Add method to resize existing window if needed
+
         }
     }
 
@@ -53,7 +54,7 @@ public class WindowNode : Node
     public override void Process()
     {
         base.Process();
-        secondaryWindow?.UpdateLocalInput(); // Update previous frame state
+        secondaryWindow?.UpdateLocalInput();
 
         if (isQueuedForFree)
         {
@@ -83,7 +84,7 @@ public class WindowNode : Node
             if (!secondaryWindow.InitializeWindowAndGraphics())
             {
                 Log.Error($"WindowNode '{Name}' failed to initialize window graphics.");
-                secondaryWindow.Dispose(); // Clean up partially created window
+                secondaryWindow.Dispose();
                 secondaryWindow = null;
                 return;
             }
@@ -109,17 +110,17 @@ public class WindowNode : Node
     private void FreeInternal()
     {
         Log.Info($"Freeing WindowNode '{Name}' and its associated window.");
-        secondaryWindow?.Close(); // Request OS window close
-                                  // Actual disposal happens via WM_NCDESTROY -> Unregister -> Win32Window.Dispose
-        secondaryWindow = null; // Remove reference
-        base.Free(); // Free the node itself from the tree
+        secondaryWindow?.Close();
+
+        secondaryWindow = null;
+        base.Free();
     }
 
 
     public override void Free()
     {
-        // This override prevents direct freeing. Use QueueFree() instead.
-        // The actual cleanup happens in FreeInternal() when processed.
+
+
         if (!isQueuedForFree)
         {
             Log.Warning($"Direct call to Free() on WindowNode '{Name}' detected. Use QueueFree() instead.");
@@ -151,7 +152,7 @@ public class WindowNode : Node
         }
 
 
-        var childrenToRender = new List<Node>(node.Children); // Copy list for safe iteration
+        var childrenToRender = new List<Node>(node.Children);
         foreach (Node child in childrenToRender)
         {
             RenderNodeRecursive(child, context);
@@ -161,7 +162,7 @@ public class WindowNode : Node
 
     public SecondaryWindow? GetWindowHandle() => secondaryWindow;
 
-    // Convenience methods to access local input state
+
     public bool IsLocalKeyDown(KeyCode key) => secondaryWindow?.IsKeyDown(key) ?? false;
     public bool IsLocalMouseButtonDown(MouseButtonCode button) => secondaryWindow?.IsMouseButtonDown(button) ?? false;
     public Vector2 LocalMousePosition => secondaryWindow?.GetMousePosition() ?? Vector2.Zero;

@@ -4,6 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Threading;
 using YamlDotNet.Serialization;
+using System.Collections.Generic;
 
 namespace Cherris;
 
@@ -12,6 +13,7 @@ public sealed class ApplicationCore
     private static readonly Lazy<ApplicationCore> lazyInstance = new(() => new ApplicationCore());
     private MainAppWindow? mainWindow;
     private Configuration? applicationConfig;
+    private readonly List<SecondaryWindow> secondaryWindows = new();
 
     private const string ConfigFilePath = "Res/Cherris/Config.yaml";
     private const string LogFilePath = "Res/Cherris/Log.txt";
@@ -20,6 +22,11 @@ public sealed class ApplicationCore
 
     private ApplicationCore()
     {
+    }
+
+    public IntPtr GetMainWindowHandle()
+    {
+        return mainWindow?.Handle ?? IntPtr.Zero;
     }
 
     public void Run()
@@ -93,31 +100,104 @@ public sealed class ApplicationCore
     {
         while (mainWindow != null && mainWindow.IsOpen)
         {
-            mainWindow.ProcessMessages();
+
+            ProcessSystemMessages();
 
 
-            ClickServer.Instance.Process();
+            ClickServer.Instance.Process(); // Still uses global Input
             SceneTree.Instance.Process();
 
 
+
             mainWindow.RenderFrame();
+            RenderSecondaryWindows();
 
 
-            Input.Update();
+            Input.Update(); // Clears previous frame's input state for global Input
 
+        }
+    }
+
+
+    private void ProcessSystemMessages()
+    {
+        while (NativeMethods.PeekMessage(out NativeMethods.MSG msg, IntPtr.Zero, 0, 0, NativeMethods.PM_REMOVE))
+        {
+            if (msg.message == NativeMethods.WM_QUIT)
+            {
+                Log.Info("WM_QUIT received, signaling application close.");
+                mainWindow?.Close(); // Signal main window to close if not already
+                break; // Exit message loop processing for this frame
+            }
+
+            NativeMethods.TranslateMessage(ref msg);
+            NativeMethods.DispatchMessage(ref msg); // Sends to the correct WindowProcedure
+        }
+    }
+
+
+    private void RenderSecondaryWindows()
+    {
+        var windowsToRender = new List<SecondaryWindow>(secondaryWindows);
+
+        foreach (var window in windowsToRender)
+        {
+            if (window.IsOpen)
+            {
+                window.RenderFrame();
+            }
+            else
+            {
+
+                secondaryWindows.Remove(window);
+            }
         }
     }
 
     private void OnMainWindowClosed()
     {
 
-        Log.Info("Main window closed signal received.");
+        Log.Info("Main window closed signal received. Closing secondary windows.");
+        CloseAllSecondaryWindows();
     }
 
     private void Cleanup()
     {
+        Log.Info("ApplicationCore Cleanup starting.");
+        CloseAllSecondaryWindows();
         mainWindow?.Dispose();
         mainWindow = null;
+        Log.Info("ApplicationCore Cleanup finished.");
+    }
+
+    private void CloseAllSecondaryWindows()
+    {
+        var windowsToClose = new List<SecondaryWindow>(secondaryWindows);
+        foreach (var window in windowsToClose)
+        {
+            window.Close(); // Request close
+            // Dispose happens when WM_NCDESTROY is processed
+        }
+        // Don't Clear() here, let them remove themselves on NCDESTROY
+    }
+
+    internal void RegisterSecondaryWindow(SecondaryWindow window)
+    {
+
+        if (!secondaryWindows.Contains(window))
+        {
+            secondaryWindows.Add(window);
+            Log.Info($"Registered secondary window: {window.Title}");
+        }
+    }
+
+    internal void UnregisterSecondaryWindow(SecondaryWindow window)
+    {
+
+        if (secondaryWindows.Remove(window))
+        {
+            Log.Info($"Unregistered secondary window: {window.Title}");
+        }
     }
 
     private void SetRootNodeFromConfig(string scenePath)
@@ -1169,6 +1249,7 @@ public static class DefaultTheme
 using System;
 using System.Numerics;
 using System.Diagnostics;
+using System.Collections.Generic;
 
 using Vortice;
 using Vortice.Mathematics;
@@ -1209,20 +1290,24 @@ public abstract class Direct2DAppWindow : Win32Window
     private readonly string fpsFontName = "Consolas";
     private readonly float fpsFontSize = 14.0f;
 
+
+    private Dictionary<Color4, ID2D1SolidColorBrush> brushCache = new();
+    private Dictionary<string, IDWriteTextFormat> textFormatCache = new();
+
     public Direct2DAppWindow(string title = "Vortice DirectUI Base Window", int width = 800, int height = 600)
         : base(title, width, height)
     { }
 
     protected override bool Initialize()
     {
-        Log.Info("Direct2DAppWindow initializing Vortice Graphics...");
+        Log.Info($"Direct2DAppWindow '{Title}' initializing Vortice Graphics...");
 
         return InitializeGraphics();
     }
 
     protected override void Cleanup()
     {
-        Log.Info("Direct2DAppWindow cleaning up its resources...");
+        Log.Info($"Direct2DAppWindow '{Title}' cleaning up its resources...");
 
         CleanupGraphics();
     }
@@ -1252,17 +1337,17 @@ public abstract class Direct2DAppWindow : Win32Window
         {
             if (!graphicsInitialized && Handle != nint.Zero && IsOpen)
             {
-                Log.Warning("Graphics not initialized in RenderFrame, attempting reinitialization.");
+                Log.Warning($"Graphics not initialized in RenderFrame for '{Title}', attempting reinitialization.");
                 InitializeGraphics();
                 if (!graphicsInitialized || renderTarget is null || dwriteFactory is null)
                 {
-                    Log.Error("Reinitialization failed in RenderFrame.");
+                    Log.Error($"Reinitialization failed in RenderFrame for '{Title}'.");
                     return;
                 }
             }
             else
             {
-                Log.Warning("RenderFrame skipped: Graphics not ready or window closed.");
+                Log.Warning($"RenderFrame skipped for '{Title}': Graphics not ready or window closed.");
                 return;
             }
         }
@@ -1272,7 +1357,7 @@ public abstract class Direct2DAppWindow : Win32Window
             renderTarget.BeginDraw();
             renderTarget.Clear(backgroundColor);
 
-            var drawingContext = new DrawingContext(renderTarget, dwriteFactory);
+            var drawingContext = new DrawingContext(renderTarget, dwriteFactory, this);
 
             DrawUIContent(drawingContext);
 
@@ -1288,10 +1373,10 @@ public abstract class Direct2DAppWindow : Win32Window
 
             if (endDrawResult.Failure)
             {
-                Log.Error($"EndDraw failed: {endDrawResult.Description}");
+                Log.Error($"EndDraw failed for '{Title}': {endDrawResult.Description}");
                 if (endDrawResult.Code == D2D.ResultCode.RecreateTarget.Code)
                 {
-                    Log.Warning("Render target needs recreation (Detected in EndDraw).");
+                    Log.Warning($"Render target needs recreation for '{Title}' (Detected in EndDraw).");
                     graphicsInitialized = false;
                     CleanupGraphics();
                     InitializeGraphics();
@@ -1300,14 +1385,14 @@ public abstract class Direct2DAppWindow : Win32Window
         }
         catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
         {
-            Log.Error($"Render target needs recreation (Caught SharpGenException in RenderFrame): {ex.Message}");
+            Log.Error($"Render target needs recreation for '{Title}' (Caught SharpGenException in RenderFrame): {ex.Message}");
             graphicsInitialized = false;
             CleanupGraphics();
             InitializeGraphics();
         }
         catch (Exception ex)
         {
-            Log.Error($"Rendering Error in RenderFrame: {ex}");
+            Log.Error($"Rendering Error in RenderFrame for '{Title}': {ex}");
 
             graphicsInitialized = false;
             CleanupGraphics();
@@ -1321,7 +1406,7 @@ public abstract class Direct2DAppWindow : Win32Window
     {
         if (graphicsInitialized && renderTarget is not null && width > 0 && height > 0)
         {
-            Log.Info($"Window resized to {width}x{height}. Resizing render target...");
+            Log.Info($"Window '{Title}' resized to {width}x{height}. Resizing render target...");
             try
             {
                 var newPixelSize = new SizeI(width, height);
@@ -1335,15 +1420,15 @@ public abstract class Direct2DAppWindow : Win32Window
 
                 RecreateDeviceSpecificResources();
 
-                Log.Info($"Successfully resized render target.");
+                Log.Info($"Successfully resized render target for '{Title}'.");
                 Invalidate();
             }
             catch (SharpGenException ex)
             {
-                Log.Error($"Failed to resize Render Target (SharpGenException): {ex.Message} HRESULT: {ex.ResultCode}");
+                Log.Error($"Failed to resize Render Target for '{Title}' (SharpGenException): {ex.Message} HRESULT: {ex.ResultCode}");
                 if (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
                 {
-                    Log.Warning("Render target needs recreation (Detected in Resize Exception).");
+                    Log.Warning($"Render target needs recreation for '{Title}' (Detected in Resize Exception).");
                     graphicsInitialized = false;
                     CleanupGraphics();
                     InitializeGraphics();
@@ -1351,7 +1436,7 @@ public abstract class Direct2DAppWindow : Win32Window
             }
             catch (Exception ex)
             {
-                Log.Error($"Failed to resize Render Target (General Exception): {ex}");
+                Log.Error($"Failed to resize Render Target for '{Title}' (General Exception): {ex}");
                 graphicsInitialized = false;
                 CleanupGraphics();
                 InitializeGraphics();
@@ -1359,13 +1444,13 @@ public abstract class Direct2DAppWindow : Win32Window
         }
         else if (!graphicsInitialized && Handle != nint.Zero && IsOpen && width > 0 && height > 0)
         {
-            Log.Warning("OnSize called but graphics not initialized. Attempting initialization.");
+            Log.Warning($"OnSize called for '{Title}' but graphics not initialized. Attempting initialization.");
 
             InitializeGraphics();
         }
         else if (width <= 0 || height <= 0)
         {
-            Log.Warning($"Ignoring OnSize call with invalid dimensions: {width}x{height}");
+            Log.Warning($"Ignoring OnSize call for '{Title}' with invalid dimensions: {width}x{height}");
         }
     }
 
@@ -1383,11 +1468,11 @@ public abstract class Direct2DAppWindow : Win32Window
         if (graphicsInitialized) return true;
         if (Handle == nint.Zero || !IsOpen)
         {
-            Log.Warning("InitializeGraphics skipped: Invalid handle or window not open.");
+            Log.Warning($"InitializeGraphics skipped for '{Title}': Invalid handle or window not open.");
             return false;
         }
 
-        Log.Info($"Attempting Graphics Initialization for HWND {Handle}...");
+        Log.Info($"Attempting Graphics Initialization for '{Title}' HWND {Handle}...");
 
         try
         {
@@ -1397,18 +1482,18 @@ public abstract class Direct2DAppWindow : Win32Window
 
             Result factoryResult = D2D1.D2D1CreateFactory(D2DFactoryType.SingleThreaded, out d2dFactory);
             factoryResult.CheckError();
-            if (d2dFactory is null) throw new InvalidOperationException("D2D Factory creation failed silently.");
+            if (d2dFactory is null) throw new InvalidOperationException($"D2D Factory creation failed silently for '{Title}'.");
 
 
             Result dwriteResult = DWrite.DWriteCreateFactory(DW.FactoryType.Shared, out dwriteFactory);
             dwriteResult.CheckError();
-            if (dwriteFactory is null) throw new InvalidOperationException("DWrite Factory creation failed silently.");
+            if (dwriteFactory is null) throw new InvalidOperationException($"DWrite Factory creation failed silently for '{Title}'.");
 
 
             var clientRectSize = GetClientRectSize();
             if (clientRectSize.Width <= 0 || clientRectSize.Height <= 0)
             {
-                Log.Warning($"Invalid client rect size ({clientRectSize.Width}x{clientRectSize.Height}). Aborting graphics initialization.");
+                Log.Warning($"Invalid client rect size ({clientRectSize.Width}x{clientRectSize.Height}) for '{Title}'. Aborting graphics initialization.");
                 CleanupGraphics();
                 return false;
             }
@@ -1425,10 +1510,14 @@ public abstract class Direct2DAppWindow : Win32Window
 
 
             renderTarget = d2dFactory.CreateHwndRenderTarget(renderTargetProperties, hwndRenderTargetProperties);
-            if (renderTarget is null) throw new InvalidOperationException("Render target creation returned null unexpectedly.");
+            if (renderTarget is null) throw new InvalidOperationException($"Render target creation returned null unexpectedly for '{Title}'.");
 
 
             renderTarget.TextAntialiasMode = D2D.TextAntialiasMode.Cleartype;
+
+
+            brushCache = new Dictionary<Color4, ID2D1SolidColorBrush>();
+            textFormatCache = new Dictionary<string, IDWriteTextFormat>();
 
 
             RecreateDeviceSpecificResources();
@@ -1439,18 +1528,18 @@ public abstract class Direct2DAppWindow : Win32Window
             lastFpsUpdateTimeTicks = 0;
             fpsTimer.Restart();
 
-            Log.Info($"Vortice Graphics initialized successfully for HWND {Handle}.");
+            Log.Info($"Vortice Graphics initialized successfully for '{Title}' HWND {Handle}.");
             graphicsInitialized = true;
             return true;
         }
         catch (SharpGenException ex)
         {
-            Log.Error($"Graphics Initialization failed (SharpGenException): {ex.Message} HRESULT: {ex.ResultCode}");
+            Log.Error($"Graphics Initialization failed for '{Title}' (SharpGenException): {ex.Message} HRESULT: {ex.ResultCode}");
             CleanupGraphics(); graphicsInitialized = false; return false;
         }
         catch (Exception ex)
         {
-            Log.Error($"Graphics Initialization failed (General Exception): {ex}");
+            Log.Error($"Graphics Initialization failed for '{Title}' (General Exception): {ex}");
             CleanupGraphics(); graphicsInitialized = false; return false;
         }
     }
@@ -1462,20 +1551,21 @@ public abstract class Direct2DAppWindow : Win32Window
         try
         {
 
+            fpsTextFormat?.Dispose();
             fpsTextFormat = dwriteFactory.CreateTextFormat(fpsFontName, null, FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, fpsFontSize, "en-us");
             fpsTextFormat.TextAlignment = DW.TextAlignment.Leading;
             fpsTextFormat.ParagraphAlignment = ParagraphAlignment.Near;
 
 
+            fpsTextBrush?.Dispose();
             fpsTextBrush = renderTarget.CreateSolidColorBrush(fpsTextColor);
 
 
-            VisualItem.CleanupResources();
-            Log.Info("Recreated FPS and VisualItem drawing resources.");
+            Log.Info($"Recreated FPS drawing resources for '{Title}'.");
         }
         catch (Exception ex)
         {
-            Log.Error($"Warning: Failed to recreate device-specific resources: {ex.Message}");
+            Log.Error($"Warning: Failed to recreate device-specific resources for '{Title}': {ex.Message}");
 
             CleanupDeviceSpecificResources();
         }
@@ -1486,13 +1576,18 @@ public abstract class Direct2DAppWindow : Win32Window
         fpsTextBrush?.Dispose(); fpsTextBrush = null;
         fpsTextFormat?.Dispose(); fpsTextFormat = null;
 
-        VisualItem.CleanupResources();
+
+        foreach (var brush in brushCache.Values) brush?.Dispose();
+        brushCache.Clear();
+        foreach (var format in textFormatCache.Values) format?.Dispose();
+        textFormatCache.Clear();
+        Log.Info($"Cleaned device-specific resources (brushes, formats) for '{Title}'.");
     }
 
     protected virtual void CleanupGraphics()
     {
         bool resourcesExisted = d2dFactory is not null || renderTarget is not null || dwriteFactory is not null;
-        if (resourcesExisted) Log.Info("Cleaning up Vortice Graphics resources...");
+        if (resourcesExisted) Log.Info($"Cleaning up Vortice Graphics resources for '{Title}'...");
 
         fpsTimer.Stop();
 
@@ -1505,7 +1600,7 @@ public abstract class Direct2DAppWindow : Win32Window
         d2dFactory?.Dispose(); d2dFactory = null;
         graphicsInitialized = false;
 
-        if (resourcesExisted) Log.Info("Finished cleaning graphics resources.");
+        if (resourcesExisted) Log.Info($"Finished cleaning graphics resources for '{Title}'.");
     }
 
     protected SizeI GetClientRectSize()
@@ -1521,9 +1616,98 @@ public abstract class Direct2DAppWindow : Win32Window
         int baseHeight = Math.Max(1, Height);
         if (Handle != nint.Zero)
         {
-            Log.Warning($"GetClientRect failed. Falling back to stored size: {baseWidth}x{baseHeight}");
+            Log.Warning($"GetClientRect failed for '{Title}'. Falling back to stored size: {baseWidth}x{baseHeight}");
         }
         return new SizeI(baseWidth, baseHeight);
+    }
+
+
+    public ID2D1SolidColorBrush? GetOrCreateBrush(Color4 color)
+    {
+        if (renderTarget is null)
+        {
+            Log.Warning($"GetOrCreateBrush called on '{Title}' with null RenderTarget.");
+            return null;
+        }
+
+
+        if (brushCache.TryGetValue(color, out ID2D1SolidColorBrush? brush) && brush is not null)
+        {
+            return brush;
+        }
+        else if (brushCache.ContainsKey(color))
+        {
+
+            brushCache.Remove(color);
+        }
+
+        try
+        {
+            brush = renderTarget.CreateSolidColorBrush(color);
+            if (brush is not null)
+            {
+                brushCache[color] = brush;
+            }
+            return brush;
+        }
+        catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
+        {
+            Log.Warning($"Recreate target detected in GetOrCreateBrush for color {color} on '{Title}'.");
+
+            CleanupDeviceSpecificResources();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Error creating brush for color {color} on '{Title}': {ex.Message}");
+            return null;
+        }
+    }
+
+    public IDWriteTextFormat? GetOrCreateTextFormat(ButtonStyle style)
+    {
+        if (dwriteFactory is null || style is null)
+        {
+            Log.Warning($"GetOrCreateTextFormat called on '{Title}' with null DWriteFactory or null style.");
+            return null;
+        }
+
+        string cacheKey = $"{style.FontName}_{style.FontSize}_{style.FontWeight}_{style.FontStyle}_{style.FontStretch}";
+
+
+        if (textFormatCache.TryGetValue(cacheKey, out IDWriteTextFormat? format) && format is not null)
+        {
+            return format;
+        }
+        else if (textFormatCache.ContainsKey(cacheKey))
+        {
+
+            textFormatCache.Remove(cacheKey);
+        }
+
+        try
+        {
+            format = dwriteFactory.CreateTextFormat(
+                style.FontName,
+                null,
+                style.FontWeight,
+                style.FontStyle,
+                style.FontStretch,
+                style.FontSize,
+                "en-us"
+            );
+
+            if (format is not null)
+            {
+                textFormatCache[cacheKey] = format;
+            }
+            return format;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Error creating text format for key {cacheKey} on '{Title}': {ex.Message}");
+            return null;
+        }
     }
 }
 </file>
@@ -1596,23 +1780,24 @@ public sealed class DisplayServer
 </file>
 
 <file path="DrawingContext.cs">
-// DrawingContext.cs
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
 
 namespace Cherris;
 
-// Holds rendering resources needed for UI drawing
+
 public readonly struct DrawingContext
 {
     public readonly ID2D1HwndRenderTarget RenderTarget;
     public readonly IDWriteFactory DWriteFactory;
-    // Could potentially add D2DFactory later if needed
+    public readonly Direct2DAppWindow OwnerWindow;
 
-    public DrawingContext(ID2D1HwndRenderTarget renderTarget, IDWriteFactory dwriteFactory)
+
+    public DrawingContext(ID2D1HwndRenderTarget renderTarget, IDWriteFactory dwriteFactory, Direct2DAppWindow ownerWindow)
     {
         RenderTarget = renderTarget;
         DWriteFactory = dwriteFactory;
+        OwnerWindow = ownerWindow;
     }
 }
 </file>
@@ -2131,6 +2316,7 @@ public class Log
 using System;
 using Vortice.DirectWrite;
 using Vortice.Mathematics;
+using System.Numerics; // Required for Vector2
 
 namespace Cherris;
 
@@ -2141,7 +2327,8 @@ public class MainAppWindow : Direct2DAppWindow
     public MainAppWindow(string title = "My DirectUI App", int width = 800, int height = 600)
         : base(title, width, height)
     {
-
+        // Ensure global input actions are set up once
+        Input.SetupDefaultActions();
     }
 
     protected override void DrawUIContent(DrawingContext context)
@@ -2153,16 +2340,226 @@ public class MainAppWindow : Direct2DAppWindow
     {
         Log.Info("MainAppWindow OnClose called.");
         Closed?.Invoke();
-        return base.OnClose();
+        return base.OnClose(); // Use base implementation which returns true
     }
 
     protected override void Cleanup()
     {
         Log.Info("MainAppWindow Cleanup starting.");
-        VisualItem.CleanupResources();
         base.Cleanup();
         Log.Info("MainAppWindow Cleanup finished.");
     }
+
+
+    protected override IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        int xPos = NativeMethods.GET_X_LPARAM(lParam);
+        int yPos = NativeMethods.GET_Y_LPARAM(lParam);
+        Vector2 mousePos = new Vector2(xPos, yPos);
+
+
+        switch (msg)
+        {
+            case NativeMethods.WM_MOUSEMOVE:
+                Input.UpdateMousePosition(mousePos);
+                break;
+
+            case NativeMethods.WM_LBUTTONDOWN:
+                Input.UpdateMouseButton(MouseButtonCode.Left, true);
+                break;
+            case NativeMethods.WM_LBUTTONUP:
+                Input.UpdateMouseButton(MouseButtonCode.Left, false);
+                break;
+
+            case NativeMethods.WM_RBUTTONDOWN:
+                Input.UpdateMouseButton(MouseButtonCode.Right, true);
+                break;
+            case NativeMethods.WM_RBUTTONUP:
+                Input.UpdateMouseButton(MouseButtonCode.Right, false);
+                break;
+
+            case NativeMethods.WM_MBUTTONDOWN:
+                Input.UpdateMouseButton(MouseButtonCode.Middle, true);
+                break;
+            case NativeMethods.WM_MBUTTONUP:
+                Input.UpdateMouseButton(MouseButtonCode.Middle, false);
+                break;
+
+            case NativeMethods.WM_XBUTTONDOWN:
+                int xButton1 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
+                if (xButton1 == NativeMethods.XBUTTON1) Input.UpdateMouseButton(MouseButtonCode.Side, true);
+                if (xButton1 == NativeMethods.XBUTTON2) Input.UpdateMouseButton(MouseButtonCode.Extra, true);
+                break;
+            case NativeMethods.WM_XBUTTONUP:
+                int xButton2 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
+                if (xButton2 == NativeMethods.XBUTTON1) Input.UpdateMouseButton(MouseButtonCode.Side, false);
+                if (xButton2 == NativeMethods.XBUTTON2) Input.UpdateMouseButton(MouseButtonCode.Extra, false);
+                break;
+
+            case NativeMethods.WM_MOUSEWHEEL:
+                short wheelDelta = NativeMethods.GET_WHEEL_DELTA_WPARAM(wParam);
+                Input.UpdateMouseWheel((float)wheelDelta / NativeMethods.WHEEL_DELTA);
+                break;
+
+            case NativeMethods.WM_KEYDOWN:
+            case NativeMethods.WM_SYSKEYDOWN:
+                int vkCodeDown = (int)wParam;
+                if (Enum.IsDefined(typeof(KeyCode), vkCodeDown))
+                {
+                    Input.UpdateKey((KeyCode)vkCodeDown, true);
+                }
+                break;
+
+            case NativeMethods.WM_KEYUP:
+            case NativeMethods.WM_SYSKEYUP:
+                int vkCodeUp = (int)wParam;
+                if (Enum.IsDefined(typeof(KeyCode), vkCodeUp))
+                {
+                    Input.UpdateKey((KeyCode)vkCodeUp, false);
+                }
+                break;
+        }
+
+
+        return base.HandleMessage(hWnd, msg, wParam, lParam);
+    }
+}
+</file>
+
+<file path="ModalSecondaryWindow.cs">
+using System;
+
+namespace Cherris;
+
+public class ModalSecondaryWindow : SecondaryWindow
+{
+    private readonly IntPtr ownerHwnd;
+
+    public ModalSecondaryWindow(string title, int width, int height, WindowNode ownerNode, IntPtr ownerHandle)
+        : base(title, width, height, ownerNode)
+    {
+        ownerHwnd = ownerHandle;
+    }
+
+
+    public override bool TryCreateWindow(IntPtr ownerHwndOverride = default, uint? styleOverride = null)
+    {
+
+        uint defaultModalStyle = NativeMethods.WS_POPUP | NativeMethods.WS_CAPTION | NativeMethods.WS_SYSMENU | NativeMethods.WS_VISIBLE;
+
+
+        return base.TryCreateWindow(ownerHwnd, styleOverride ?? defaultModalStyle);
+    }
+
+    public override void ShowWindow()
+    {
+
+        if (ownerHwnd != IntPtr.Zero)
+        {
+            NativeMethods.EnableWindow(ownerHwnd, false);
+        }
+        base.ShowWindow();
+    }
+
+    protected override void OnDestroy()
+    {
+
+        if (ownerHwnd != IntPtr.Zero)
+        {
+            NativeMethods.EnableWindow(ownerHwnd, true);
+        }
+        base.OnDestroy();
+    }
+
+
+    protected override bool OnClose()
+    {
+        Log.Info($"ModalSecondaryWindow '{Title}' OnClose called.");
+
+        if (ownerHwnd != IntPtr.Zero)
+        {
+            NativeMethods.EnableWindow(ownerHwnd, true);
+        }
+
+
+        return base.OnClose();
+    }
+}
+</file>
+
+<file path="ModalWindowNode.cs">
+using System;
+using System.Numerics;
+
+namespace Cherris;
+
+public class ModalWindowNode : WindowNode
+{
+    private ModalSecondaryWindow? modalWindow;
+
+
+    public override void Make()
+    {
+        base.Make();
+        InitializeModalWindow();
+    }
+
+
+    private void InitializeModalWindow()
+    {
+        if (modalWindow is not null)
+        {
+            Log.Warning($"ModalWindowNode '{Name}' already has an associated window. Skipping creation.");
+            return;
+        }
+
+        var ownerHandle = ApplicationCore.Instance.GetMainWindowHandle();
+        if (ownerHandle == IntPtr.Zero)
+        {
+            Log.Error($"ModalWindowNode '{Name}' could not get the main window handle. Cannot create modal window.");
+            return;
+        }
+
+        try
+        {
+            modalWindow = new ModalSecondaryWindow(Title, Width, Height, this, ownerHandle);
+
+            if (!modalWindow.TryCreateWindow())
+            {
+                Log.Error($"ModalWindowNode '{Name}' failed to create its modal window.");
+                modalWindow = null;
+                return;
+            }
+
+            if (!modalWindow.InitializeWindowAndGraphics())
+            {
+                Log.Error($"ModalWindowNode '{Name}' failed to initialize modal window graphics.");
+                modalWindow.Dispose();
+                modalWindow = null;
+                return;
+            }
+
+            modalWindow.ShowWindow();
+            Log.Info($"ModalWindowNode '{Name}' successfully created and initialized its modal window.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Error during ModalWindowNode '{Name}' initialization: {ex.Message}");
+            modalWindow?.Dispose();
+            modalWindow = null;
+        }
+    }
+
+    public override void Free()
+    {
+        Log.Info($"Freeing ModalWindowNode '{Name}' and its associated modal window.");
+        modalWindow?.Close();
+        modalWindow?.Dispose();
+        modalWindow = null;
+        base.Free();
+    }
+
+
 }
 </file>
 
@@ -2196,8 +2593,17 @@ internal static class NativeMethods
     public const uint CS_VREDRAW = 0x0001;
     public const uint CS_OWNDC = 0x0020;
 
-    public const uint WS_OVERLAPPEDWINDOW = 0xCF0000;
+    public const uint WS_OVERLAPPED = 0x00000000;
+    public const uint WS_CAPTION = 0x00C00000;     /* WS_BORDER | WS_DLGFRAME  */
+    public const uint WS_SYSMENU = 0x00080000;
+    public const uint WS_THICKFRAME = 0x00040000; // For resizing
+    public const uint WS_MINIMIZEBOX = 0x00020000;
+    public const uint WS_MAXIMIZEBOX = 0x00010000;
+    public const uint WS_OVERLAPPEDWINDOW = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
     public const uint WS_VISIBLE = 0x10000000;
+    public const uint WS_POPUP = 0x80000000;
+    public const uint WS_BORDER = 0x00800000;
+    public const uint WS_DLGFRAME = 0x00400000;
 
     public const int WM_NCCREATE = 0x0081;
     public const int WM_CREATE = 0x0001;
@@ -2221,6 +2627,8 @@ internal static class NativeMethods
     public const int WM_MOUSEMOVE = 0x0200;
     public const int WM_MOUSEWHEEL = 0x020A;
     public const int WM_QUIT = 0x0012;
+    public const int WM_PARENTNOTIFY = 0x0210;
+    public const int WM_ENTERIDLE = 0x0121;
 
 
     public const int CW_USEDEFAULT = unchecked((int)0x80000000);
@@ -2228,6 +2636,8 @@ internal static class NativeMethods
     public const int VK_ESCAPE = 0x1B;
     public const int GWLP_USERDATA = -21;
     public const int GCLP_HBRBACKGROUND = -10;
+    public const int GWL_STYLE = -16;
+
 
     public const int IDI_APPLICATION = 32512;
     public const int IDC_ARROW = 32512;
@@ -2374,6 +2784,15 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr lpIconName);
+
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetParent(IntPtr hWnd);
+
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
@@ -3604,7 +4023,6 @@ public sealed class ResourceLoader
 </file>
 
 <file path="SceneTree.cs">
-// file: SceneTree.cs
 using System.Runtime.CompilerServices;
 
 namespace Cherris;
@@ -3666,7 +4084,9 @@ public sealed class SceneTree
             node.Process();
         }
 
-        foreach (Node child in node.Children.ToList())
+
+        var childrenToProcess = new List<Node>(node.Children);
+        foreach (Node child in childrenToProcess)
         {
             ProcessNode(child);
         }
@@ -3719,12 +4139,21 @@ public sealed class SceneTree
 
     private static void RenderNode(Node node, DrawingContext context)
     {
+
+        if (node is WindowNode)
+        {
+
+            return;
+        }
+
         if (node is VisualItem { Visible: true } visualItem)
         {
             visualItem.Draw(context);
         }
 
-        foreach (Node child in node.Children.ToList())
+
+        var childrenToRender = new List<Node>(node.Children);
+        foreach (Node child in childrenToRender)
         {
             RenderNode(child, context);
         }
@@ -3744,7 +4173,8 @@ public sealed class SceneTree
 
     private void ProcessTimers()
     {
-        foreach (SceneTreeTimer timer in timers.ToList())
+        var timersToProcess = new List<SceneTreeTimer>(timers);
+        foreach (SceneTreeTimer timer in timersToProcess)
         {
             timer.Process();
         }
@@ -3754,6 +4184,7 @@ public sealed class SceneTree
     {
         RootNode?.Free();
         RootNode = node;
+        readyNodes.Clear();
     }
 
     public Tween CreateTween(Node creatorNode, Node.ProcessMode processMode = Node.ProcessMode.Inherit)
@@ -3765,11 +4196,19 @@ public sealed class SceneTree
 
     private void ProcessTweens()
     {
-        foreach (Tween tween in activeTweens.ToList())
+        var tweensToProcess = new List<Tween>(activeTweens);
+        foreach (Tween tween in tweensToProcess)
         {
+            if (!tween.Active)
+            {
+                activeTweens.Remove(tween);
+                continue;
+            }
+
             if (tween.ShouldProcess(Paused))
             {
-
+                // TODO: Properly integrate Time.Delta or pass it
+                tween.Update(Time.Delta);
             }
 
             if (!tween.Active)
@@ -3802,6 +4241,158 @@ public class SceneTreeTimer(float waitTime)
             SceneTree.Instance.RemoveTimer(this);
         }
     }
+}
+</file>
+
+<file path="SecondaryWindow.cs">
+using System;
+using System.Collections.Generic;
+using System.Numerics;
+
+namespace Cherris;
+
+public class SecondaryWindow : Direct2DAppWindow
+{
+    private readonly WindowNode ownerNode;
+    private readonly HashSet<KeyCode> currentKeysDown = [];
+    private readonly HashSet<MouseButtonCode> currentMouseButtonsDown = [];
+    private Vector2 currentMousePosition = Vector2.Zero;
+    private float currentMouseWheelDelta = 0f; // Added for local wheel state
+    private readonly HashSet<KeyCode> previousKeysDown = []; // Added for local pressed/released
+    private readonly HashSet<MouseButtonCode> previousMouseButtonsDown = []; // Added for local pressed/released
+
+    public SecondaryWindow(string title, int width, int height, WindowNode owner)
+        : base(title, width, height)
+    {
+        ownerNode = owner ?? throw new ArgumentNullException(nameof(owner));
+        ApplicationCore.Instance.RegisterSecondaryWindow(this);
+    }
+
+    protected override void DrawUIContent(DrawingContext context)
+    {
+
+        ownerNode?.RenderChildren(context);
+    }
+
+    protected override bool OnClose()
+    {
+        Log.Info($"SecondaryWindow '{Title}' OnClose called.");
+
+
+        ownerNode?.QueueFree(); // Request the node be freed
+
+
+        return base.OnClose();
+    }
+
+    protected override void Cleanup()
+    {
+        Log.Info($"SecondaryWindow '{Title}' Cleanup starting.");
+
+        base.Cleanup();
+        Log.Info($"SecondaryWindow '{Title}' Cleanup finished.");
+    }
+
+
+    public void UpdateLocalInput()
+    {
+        previousMouseButtonsDown.Clear();
+        foreach (var button in currentMouseButtonsDown)
+        {
+            previousMouseButtonsDown.Add(button);
+        }
+
+        previousKeysDown.Clear();
+        foreach (var key in currentKeysDown)
+        {
+            previousKeysDown.Add(key);
+        }
+        currentMouseWheelDelta = 0f;
+    }
+
+    protected override IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        int xPos = NativeMethods.GET_X_LPARAM(lParam);
+        int yPos = NativeMethods.GET_Y_LPARAM(lParam);
+        Vector2 mousePos = new Vector2(xPos, yPos);
+
+        switch (msg)
+        {
+            case NativeMethods.WM_MOUSEMOVE:
+                currentMousePosition = mousePos;
+                break;
+
+            case NativeMethods.WM_LBUTTONDOWN:
+                currentMouseButtonsDown.Add(MouseButtonCode.Left);
+                break;
+            case NativeMethods.WM_LBUTTONUP:
+                currentMouseButtonsDown.Remove(MouseButtonCode.Left);
+                break;
+
+            case NativeMethods.WM_RBUTTONDOWN:
+                currentMouseButtonsDown.Add(MouseButtonCode.Right);
+                break;
+            case NativeMethods.WM_RBUTTONUP:
+                currentMouseButtonsDown.Remove(MouseButtonCode.Right);
+                break;
+
+            case NativeMethods.WM_MBUTTONDOWN:
+                currentMouseButtonsDown.Add(MouseButtonCode.Middle);
+                break;
+            case NativeMethods.WM_MBUTTONUP:
+                currentMouseButtonsDown.Remove(MouseButtonCode.Middle);
+                break;
+
+            case NativeMethods.WM_XBUTTONDOWN:
+                int xButton1 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
+                if (xButton1 == NativeMethods.XBUTTON1) currentMouseButtonsDown.Add(MouseButtonCode.Side);
+                if (xButton1 == NativeMethods.XBUTTON2) currentMouseButtonsDown.Add(MouseButtonCode.Extra);
+                break;
+            case NativeMethods.WM_XBUTTONUP:
+                int xButton2 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
+                if (xButton2 == NativeMethods.XBUTTON1) currentMouseButtonsDown.Remove(MouseButtonCode.Side);
+                if (xButton2 == NativeMethods.XBUTTON2) currentMouseButtonsDown.Remove(MouseButtonCode.Extra);
+                break;
+
+            case NativeMethods.WM_MOUSEWHEEL:
+                short wheelDelta = NativeMethods.GET_WHEEL_DELTA_WPARAM(wParam);
+                currentMouseWheelDelta = (float)wheelDelta / NativeMethods.WHEEL_DELTA;
+                break;
+
+            case NativeMethods.WM_KEYDOWN:
+            case NativeMethods.WM_SYSKEYDOWN:
+                int vkCodeDown = (int)wParam;
+                if (Enum.IsDefined(typeof(KeyCode), vkCodeDown))
+                {
+                    currentKeysDown.Add((KeyCode)vkCodeDown);
+                }
+                break;
+
+            case NativeMethods.WM_KEYUP:
+            case NativeMethods.WM_SYSKEYUP:
+                int vkCodeUp = (int)wParam;
+                if (Enum.IsDefined(typeof(KeyCode), vkCodeUp))
+                {
+                    currentKeysDown.Remove((KeyCode)vkCodeUp);
+                }
+                break;
+        }
+
+
+        return base.HandleMessage(hWnd, msg, wParam, lParam);
+    }
+
+
+    public bool IsKeyDown(KeyCode key) => currentKeysDown.Contains(key);
+    public bool IsMouseButtonDown(MouseButtonCode button) => currentMouseButtonsDown.Contains(button);
+    public Vector2 GetMousePosition() => currentMousePosition;
+
+    public bool IsKeyPressed(KeyCode key) => currentKeysDown.Contains(key) && !previousKeysDown.Contains(key);
+    public bool IsKeyReleased(KeyCode key) => !currentKeysDown.Contains(key) && previousKeysDown.Contains(key);
+    public bool IsMouseButtonPressed(MouseButtonCode button) => currentMouseButtonsDown.Contains(button) && !previousMouseButtonsDown.Contains(button);
+    public bool IsMouseButtonReleased(MouseButtonCode button) => !currentMouseButtonsDown.Contains(button) && previousMouseButtonsDown.Contains(button);
+    public float GetMouseWheelMovement() => currentMouseWheelDelta;
+
 }
 </file>
 
@@ -4027,7 +4618,6 @@ public enum VAlignment
 </file>
 
 <file path="VisualItem.cs">
-// file: VisualItem.cs
 using SharpGen.Runtime;
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
@@ -4042,8 +4632,6 @@ public abstract class VisualItem : Node
     private bool fieldVisible = true;
     private int fieldLayer = 0;
 
-    private static readonly Dictionary<Color4, ID2D1SolidColorBrush> brushCache = new();
-    private static readonly Dictionary<string, IDWriteTextFormat> textFormatCache = new();
 
     public bool Visible
     {
@@ -4084,108 +4672,9 @@ public abstract class VisualItem : Node
     public virtual void Draw(DrawingContext context) { }
 
 
-    public static void CleanupResources()
-    {
-        foreach (var brush in brushCache.Values)
-        {
-            brush?.Dispose();
-        }
-        brushCache.Clear();
-
-        foreach (var format in textFormatCache.Values)
-        {
-            format?.Dispose();
-        }
-        textFormatCache.Clear();
-        Console.WriteLine("VisualItem static resources cleaned.");
-    }
-
-
-    protected static ID2D1SolidColorBrush? GetOrCreateBrush(DrawingContext context, Color4 color)
-    {
-        if (context.RenderTarget is null)
-        {
-            return null;
-        }
-
-        if (brushCache.TryGetValue(color, out ID2D1SolidColorBrush? brush) && brush is not null)
-        {
-            return brush;
-        }
-        else if (brushCache.ContainsKey(color))
-        {
-            brushCache.Remove(color);
-        }
-
-        try
-        {
-            brush = context.RenderTarget.CreateSolidColorBrush(color);
-            if (brush is not null)
-            {
-                brushCache[color] = brush;
-            }
-            return brush;
-        }
-        catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
-        {
-            Console.WriteLine($"Recreate target detected in GetOrCreateBrush for color {color}.");
-            CleanupResources();
-            return null;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error creating brush for color {color}: {ex.Message}");
-            return null;
-        }
-    }
-
-    protected static IDWriteTextFormat? GetOrCreateTextFormat(DrawingContext context, ButtonStyle style)
-    {
-        if (context.DWriteFactory is null || style is null)
-        {
-            return null;
-        }
-
-        string cacheKey = $"{style.FontName}_{style.FontSize}_{style.FontWeight}_{style.FontStyle}_{style.FontStretch}";
-
-        if (textFormatCache.TryGetValue(cacheKey, out IDWriteTextFormat? format) && format is not null)
-        {
-            return format;
-        }
-        else if (textFormatCache.ContainsKey(cacheKey))
-        {
-            textFormatCache.Remove(cacheKey);
-        }
-
-        try
-        {
-            format = context.DWriteFactory.CreateTextFormat(
-                style.FontName,
-                null,
-                style.FontWeight,
-                style.FontStyle,
-                style.FontStretch,
-                style.FontSize,
-                "en-us"
-            );
-
-            if (format is not null)
-            {
-                textFormatCache[cacheKey] = format;
-            }
-            return format;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error creating text format for key {cacheKey}: {ex.Message}");
-            return null;
-        }
-    }
-
-
     protected void DrawStyledRectangle(DrawingContext context, Rect bounds, BoxStyle style)
     {
-        if (context.RenderTarget is null || style is null || bounds.Width <= 0 || bounds.Height <= 0)
+        if (context.OwnerWindow is null || context.RenderTarget is null || style is null || bounds.Width <= 0 || bounds.Height <= 0)
         {
             return;
         }
@@ -4196,28 +4685,29 @@ public abstract class VisualItem : Node
         }
         catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
         {
-            Console.WriteLine("Recreate target detected in DrawStyledRectangle.");
-            CleanupResources();
+            Log.Warning("Recreate target detected in DrawStyledRectangle.");
+
+
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error drawing styled rectangle: {ex.Message}");
+            Log.Error($"Error drawing styled rectangle: {ex.Message}");
         }
     }
 
     protected void DrawFormattedText(DrawingContext context, string text, Rect layoutRect, ButtonStyle style, HAlignment hAlignment, VAlignment vAlignment)
     {
-        if (string.IsNullOrEmpty(text) || context.RenderTarget is null || style is null || layoutRect.Width <= 0 || layoutRect.Height <= 0)
+        if (string.IsNullOrEmpty(text) || context.OwnerWindow is null || context.RenderTarget is null || style is null || layoutRect.Width <= 0 || layoutRect.Height <= 0)
         {
             return;
         }
 
-        ID2D1SolidColorBrush? textBrush = GetOrCreateBrush(context, style.FontColor);
-        IDWriteTextFormat? textFormat = GetOrCreateTextFormat(context, style);
+        ID2D1SolidColorBrush? textBrush = context.OwnerWindow.GetOrCreateBrush(style.FontColor);
+        IDWriteTextFormat? textFormat = context.OwnerWindow.GetOrCreateTextFormat(style);
 
         if (textBrush is null || textFormat is null)
         {
-            Console.WriteLine($"Could not get brush or format for drawing text '{text}'.");
+
             return;
         }
 
@@ -4248,12 +4738,13 @@ public abstract class VisualItem : Node
         }
         catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
         {
-            Console.WriteLine("Recreate target detected in DrawFormattedText.");
-            CleanupResources();
+            Log.Warning("Recreate target detected in DrawFormattedText.");
+
+
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error drawing formatted text '{text}': {ex.Message}");
+            Log.Error($"Error drawing formatted text '{text}': {ex.Message}");
         }
     }
 
@@ -4261,10 +4752,11 @@ public abstract class VisualItem : Node
     private static void DrawBoxStyleHelper(DrawingContext context, Rect bounds, BoxStyle style)
     {
         var renderTarget = context.RenderTarget;
-        if (renderTarget is null || style is null || bounds.Width <= 0 || bounds.Height <= 0) return;
+        var ownerWindow = context.OwnerWindow;
+        if (renderTarget is null || ownerWindow is null || style is null || bounds.Width <= 0 || bounds.Height <= 0) return;
 
-        ID2D1SolidColorBrush? fillBrush = GetOrCreateBrush(context, style.FillColor);
-        ID2D1SolidColorBrush? borderBrush = GetOrCreateBrush(context, style.BorderColor);
+        ID2D1SolidColorBrush? fillBrush = ownerWindow.GetOrCreateBrush(style.FillColor);
+        ID2D1SolidColorBrush? borderBrush = ownerWindow.GetOrCreateBrush(style.BorderColor);
 
         float borderTop = Math.Max(0f, style.BorderLengthTop);
         float borderRight = Math.Max(0f, style.BorderLengthRight);
@@ -4310,6 +4802,7 @@ public abstract class VisualItem : Node
                     }
                     else if (!hasVisibleBorder)
                     {
+
                         System.Drawing.RectangleF outerRectF = new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
                         RoundedRectangle outerRoundedRect = new(outerRectF, radius, radius);
                         renderTarget.FillRoundedRectangle(outerRoundedRect, fillBrush);
@@ -4318,6 +4811,7 @@ public abstract class VisualItem : Node
                 return;
             }
         }
+
 
         if (hasVisibleBorder && borderBrush is not null)
         {
@@ -4337,6 +4831,7 @@ public abstract class VisualItem : Node
             }
             else if (!hasVisibleBorder)
             {
+
                 renderTarget.FillRectangle(bounds, fillBrush);
             }
         }
@@ -4367,6 +4862,7 @@ public abstract class Win32Window : IDisposable
     private GCHandle _gcHandle;
 
     public IntPtr Handle => _hwnd;
+    public string Title => _windowTitle;
     public int Width { get; protected set; }
     public int Height { get; protected set; }
     public bool IsOpen { get; private set; } = false;
@@ -4381,10 +4877,10 @@ public abstract class Win32Window : IDisposable
         Height = _initialHeight;
         _windowClassName = className ?? ("Win32Window_" + Guid.NewGuid().ToString("N"));
         _wndProcDelegate = WindowProcedure;
-        Input.SetupDefaultActions();
+
     }
 
-    public bool TryCreateWindow()
+    public virtual bool TryCreateWindow(IntPtr ownerHwnd = default, uint? styleOverride = null)
     {
         if (_hwnd != IntPtr.Zero)
         {
@@ -4429,14 +4925,20 @@ public abstract class Win32Window : IDisposable
         }
 
         _gcHandle = GCHandle.Alloc(this);
+
+        uint windowStyle = styleOverride ?? NativeMethods.WS_OVERLAPPEDWINDOW;
+
         _hwnd = NativeMethods.CreateWindowEx(
             0,
             _windowClassName,
             _windowTitle,
-            NativeMethods.WS_OVERLAPPEDWINDOW,
+            windowStyle,
             NativeMethods.CW_USEDEFAULT, NativeMethods.CW_USEDEFAULT,
             _initialWidth, _initialHeight,
-            IntPtr.Zero, IntPtr.Zero, _hInstance, GCHandle.ToIntPtr(_gcHandle));
+            ownerHwnd,
+            IntPtr.Zero,
+            _hInstance,
+            GCHandle.ToIntPtr(_gcHandle));
 
         if (_hwnd == IntPtr.Zero)
         {
@@ -4445,12 +4947,12 @@ public abstract class Win32Window : IDisposable
             return false;
         }
 
-        Log.Info($"Window created with HWND: {_hwnd}");
+        Log.Info($"Window '{_windowTitle}' created with HWND: {_hwnd}");
         IsOpen = true;
         return true;
     }
 
-    public void ShowWindow()
+    public virtual void ShowWindow()
     {
         if (_hwnd != IntPtr.Zero && IsOpen)
         {
@@ -4459,7 +4961,7 @@ public abstract class Win32Window : IDisposable
         }
         else
         {
-            Log.Warning("Cannot show window: Handle is zero or window is not open.");
+            Log.Warning($"Cannot show window '{Title}': Handle is zero or window is not open.");
         }
     }
 
@@ -4467,7 +4969,7 @@ public abstract class Win32Window : IDisposable
     {
         if (_hwnd == IntPtr.Zero || !IsOpen)
         {
-            Log.Error("Cannot initialize: Window handle is invalid or window is closed.");
+            Log.Error($"Cannot initialize '{Title}': Window handle is invalid or window is closed.");
             return false;
         }
 
@@ -4475,21 +4977,6 @@ public abstract class Win32Window : IDisposable
         return Initialize();
     }
 
-    public void ProcessMessages()
-    {
-        while (NativeMethods.PeekMessage(out NativeMethods.MSG msg, IntPtr.Zero, 0, 0, NativeMethods.PM_REMOVE))
-        {
-            if (msg.message == NativeMethods.WM_QUIT)
-            {
-                Log.Info("WM_QUIT received, signaling window close.");
-                IsOpen = false;
-                break;
-            }
-
-            NativeMethods.TranslateMessage(ref msg);
-            NativeMethods.DispatchMessage(ref msg);
-        }
-    }
 
     private static IntPtr WindowProcedure(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
@@ -4531,7 +5018,7 @@ public abstract class Win32Window : IDisposable
                     }
                     else
                     {
-                        Log.Warning($"WindowProcedure: GCHandle {ptr} is not allocated or target is null for HWND {hWnd}, Msg={msg}");
+
                     }
                 }
                 catch (InvalidOperationException)
@@ -4555,22 +5042,23 @@ public abstract class Win32Window : IDisposable
             }
             catch (Exception ex)
             {
-                Log.Error($"Error handling message {msg} for HWND {hWnd}: {ex}");
+                Log.Error($"Error handling message {msg} for HWND {hWnd} ('{window.Title}'): {ex}");
             }
         }
         else if (msg != NativeMethods.WM_NCCREATE && msg != NativeMethods.WM_NCDESTROY)
         {
-            Log.Info($"WindowProcedure: No window instance found for HWND {hWnd}, Msg={msg}. Using DefWindowProc.", true);
+
         }
 
         return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
+
     protected virtual IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         int xPos = NativeMethods.GET_X_LPARAM(lParam);
         int yPos = NativeMethods.GET_Y_LPARAM(lParam);
-        Vector2 mousePos = new Vector2(xPos, yPos);
+
 
         switch (msg)
         {
@@ -4586,68 +5074,53 @@ public abstract class Win32Window : IDisposable
                 return IntPtr.Zero;
 
             case NativeMethods.WM_MOUSEMOVE:
-                Input.UpdateMousePosition(mousePos);
                 OnMouseMove(xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_LBUTTONDOWN:
-                Input.UpdateMouseButton(MouseButtonCode.Left, true);
                 OnMouseDown(MouseButton.Left, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_LBUTTONUP:
-                Input.UpdateMouseButton(MouseButtonCode.Left, false);
                 OnMouseUp(MouseButton.Left, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_RBUTTONDOWN:
-                Input.UpdateMouseButton(MouseButtonCode.Right, true);
                 OnMouseDown(MouseButton.Right, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_RBUTTONUP:
-                Input.UpdateMouseButton(MouseButtonCode.Right, false);
                 OnMouseUp(MouseButton.Right, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_MBUTTONDOWN:
-                Input.UpdateMouseButton(MouseButtonCode.Middle, true);
                 OnMouseDown(MouseButton.Middle, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_MBUTTONUP:
-                Input.UpdateMouseButton(MouseButtonCode.Middle, false);
                 OnMouseUp(MouseButton.Middle, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_XBUTTONDOWN:
                 int xButton1 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
-                if (xButton1 == NativeMethods.XBUTTON1) Input.UpdateMouseButton(MouseButtonCode.Side, true);
-                if (xButton1 == NativeMethods.XBUTTON2) Input.UpdateMouseButton(MouseButtonCode.Extra, true);
                 OnMouseDown(xButton1 == NativeMethods.XBUTTON1 ? MouseButton.XButton1 : MouseButton.XButton2, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_XBUTTONUP:
                 int xButton2 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
-                if (xButton2 == NativeMethods.XBUTTON1) Input.UpdateMouseButton(MouseButtonCode.Side, false);
-                if (xButton2 == NativeMethods.XBUTTON2) Input.UpdateMouseButton(MouseButtonCode.Extra, false);
                 OnMouseUp(xButton2 == NativeMethods.XBUTTON1 ? MouseButton.XButton1 : MouseButton.XButton2, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_MOUSEWHEEL:
                 short wheelDelta = NativeMethods.GET_WHEEL_DELTA_WPARAM(wParam);
-                Input.UpdateMouseWheel((float)wheelDelta / NativeMethods.WHEEL_DELTA);
                 OnMouseWheel(wheelDelta);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_KEYDOWN:
             case NativeMethods.WM_SYSKEYDOWN:
                 int vkCodeDown = (int)wParam;
-                if (Enum.IsDefined(typeof(KeyCode), vkCodeDown))
-                {
-                    Input.UpdateKey((KeyCode)vkCodeDown, true);
-                }
                 OnKeyDown(vkCodeDown);
+
 
                 if (vkCodeDown == NativeMethods.VK_ESCAPE && !IsKeyDownHandled(vkCodeDown))
                 {
@@ -4658,10 +5131,6 @@ public abstract class Win32Window : IDisposable
             case NativeMethods.WM_KEYUP:
             case NativeMethods.WM_SYSKEYUP:
                 int vkCodeUp = (int)wParam;
-                if (Enum.IsDefined(typeof(KeyCode), vkCodeUp))
-                {
-                    Input.UpdateKey((KeyCode)vkCodeUp, false);
-                }
                 OnKeyUp(vkCodeUp);
                 return IntPtr.Zero;
 
@@ -4673,14 +5142,23 @@ public abstract class Win32Window : IDisposable
                 return IntPtr.Zero;
 
             case NativeMethods.WM_DESTROY:
-                Log.Info($"WM_DESTROY for {hWnd}.");
+                Log.Info($"WM_DESTROY for {hWnd} ('{Title}').");
                 OnDestroy();
 
-                NativeMethods.PostQuitMessage(0);
+
+                if (this is MainAppWindow)
+                {
+                    Log.Info("Main window destroyed, posting quit message.");
+                    NativeMethods.PostQuitMessage(0);
+                }
+                else if (this is SecondaryWindow secWin)
+                {
+                    ApplicationCore.Instance.UnregisterSecondaryWindow(secWin);
+                }
                 return IntPtr.Zero;
 
             case NativeMethods.WM_NCDESTROY:
-                Log.Info($"WM_NCDESTROY: Releasing GCHandle for {hWnd}.");
+                Log.Info($"WM_NCDESTROY: Releasing GCHandle for {hWnd} ('{Title}').");
                 IntPtr ptr = NativeMethods.GetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA);
                 if (ptr != IntPtr.Zero)
                 {
@@ -4717,7 +5195,7 @@ public abstract class Win32Window : IDisposable
     {
         if (_hwnd != IntPtr.Zero && IsOpen)
         {
-            Log.Info($"Programmatically closing window {_hwnd}.");
+            Log.Info($"Programmatically closing window {_hwnd} ('{Title}').");
             NativeMethods.PostMessage(_hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         }
     }
@@ -4758,17 +5236,17 @@ public abstract class Win32Window : IDisposable
         {
             if (disposing)
             {
-                Log.Info("Disposing Win32Window (managed)...");
+                Log.Info($"Disposing Win32Window '{Title}' (managed)...");
                 Cleanup();
             }
 
-            Log.Info("Disposing Win32Window (unmanaged)...");
+            Log.Info($"Disposing Win32Window '{Title}' (unmanaged)...");
             if (_hwnd != IntPtr.Zero)
             {
-                Log.Info($"Requesting destroy for window {_hwnd} during Dispose...");
+                Log.Info($"Requesting destroy for window {_hwnd} ('{Title}') during Dispose...");
 
 
-                NativeMethods.DestroyWindow(_hwnd);
+                NativeMethods.DestroyWindow(_hwnd); // Should trigger WM_DESTROY/NC_DESTROY
 
             }
             else
@@ -4776,26 +5254,203 @@ public abstract class Win32Window : IDisposable
 
                 if (_gcHandle.IsAllocated)
                 {
-                    Log.Warning("Freeing potentially dangling GCHandle during Dispose (window handle was already zero)...");
+                    Log.Warning($"Freeing potentially dangling GCHandle for '{Title}' during Dispose (window handle was already zero)...");
                     try { _gcHandle.Free(); } catch (Exception ex) { Log.Error($"Error freeing GCHandle: {ex.Message}"); }
                 }
             }
 
+
             _isDisposed = true;
-            IsOpen = false;
-            Log.Info("Win32Window disposed.");
+            IsOpen = false; // Ensure state is updated even if called directly
+            Log.Info($"Win32Window '{Title}' disposed.");
         }
     }
 
     ~Win32Window()
     {
-        Log.Warning("Win32Window Finalizer called!");
+        Log.Warning($"Win32Window Finalizer called for '{Title}'!");
         Dispose(false);
     }
 }
 
 
 public enum MouseButton { Left, Right, Middle, XButton1, XButton2 }
+</file>
+
+<file path="WindowNode.cs">
+using System;
+using System.Numerics;
+
+namespace Cherris;
+
+public class WindowNode : Node
+{
+    private SecondaryWindow? secondaryWindow;
+    private string windowTitle = "Cherris Window";
+    private int windowWidth = 640;
+    private int windowHeight = 480;
+    private bool isQueuedForFree = false;
+
+    public string Title
+    {
+        get => windowTitle;
+        set
+        {
+            if (windowTitle == value) return;
+            windowTitle = value;
+            // TODO: Add method to update existing window title if needed
+        }
+    }
+
+    public int Width
+    {
+        get => windowWidth;
+        set
+        {
+            if (windowWidth == value) return;
+            windowWidth = value;
+            // TODO: Add method to resize existing window if needed
+        }
+    }
+
+    public int Height
+    {
+        get => windowHeight;
+        set
+        {
+            if (windowHeight == value) return;
+            windowHeight = value;
+            // TODO: Add method to resize existing window if needed
+        }
+    }
+
+    public override void Make()
+    {
+        base.Make();
+        InitializeWindow();
+    }
+
+    public override void Process()
+    {
+        base.Process();
+        secondaryWindow?.UpdateLocalInput(); // Update previous frame state
+
+        if (isQueuedForFree)
+        {
+            FreeInternal();
+        }
+    }
+
+    private void InitializeWindow()
+    {
+        if (secondaryWindow is not null)
+        {
+            Log.Warning($"WindowNode '{Name}' already has an associated window. Skipping creation.");
+            return;
+        }
+
+        try
+        {
+            secondaryWindow = new SecondaryWindow(Title, Width, Height, this);
+
+            if (!secondaryWindow.TryCreateWindow())
+            {
+                Log.Error($"WindowNode '{Name}' failed to create its window.");
+                secondaryWindow = null;
+                return;
+            }
+
+            if (!secondaryWindow.InitializeWindowAndGraphics())
+            {
+                Log.Error($"WindowNode '{Name}' failed to initialize window graphics.");
+                secondaryWindow.Dispose(); // Clean up partially created window
+                secondaryWindow = null;
+                return;
+            }
+
+            secondaryWindow.ShowWindow();
+            Log.Info($"WindowNode '{Name}' successfully created and initialized its window.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Error during WindowNode '{Name}' initialization: {ex.Message}");
+            secondaryWindow?.Dispose();
+            secondaryWindow = null;
+        }
+    }
+
+
+    public void QueueFree()
+    {
+        isQueuedForFree = true;
+    }
+
+
+    private void FreeInternal()
+    {
+        Log.Info($"Freeing WindowNode '{Name}' and its associated window.");
+        secondaryWindow?.Close(); // Request OS window close
+                                  // Actual disposal happens via WM_NCDESTROY -> Unregister -> Win32Window.Dispose
+        secondaryWindow = null; // Remove reference
+        base.Free(); // Free the node itself from the tree
+    }
+
+
+    public override void Free()
+    {
+        // This override prevents direct freeing. Use QueueFree() instead.
+        // The actual cleanup happens in FreeInternal() when processed.
+        if (!isQueuedForFree)
+        {
+            Log.Warning($"Direct call to Free() on WindowNode '{Name}' detected. Use QueueFree() instead.");
+            QueueFree();
+        }
+    }
+
+    internal void RenderChildren(DrawingContext context)
+    {
+
+        foreach (Node child in Children)
+        {
+            RenderNodeRecursive(child, context);
+        }
+    }
+
+    private static void RenderNodeRecursive(Node node, DrawingContext context)
+    {
+
+        if (node is WindowNode)
+        {
+
+            return;
+        }
+
+        if (node is VisualItem { Visible: true } visualItem)
+        {
+            visualItem.Draw(context);
+        }
+
+
+        var childrenToRender = new List<Node>(node.Children); // Copy list for safe iteration
+        foreach (Node child in childrenToRender)
+        {
+            RenderNodeRecursive(child, context);
+        }
+    }
+
+
+    public SecondaryWindow? GetWindowHandle() => secondaryWindow;
+
+    // Convenience methods to access local input state
+    public bool IsLocalKeyDown(KeyCode key) => secondaryWindow?.IsKeyDown(key) ?? false;
+    public bool IsLocalMouseButtonDown(MouseButtonCode button) => secondaryWindow?.IsMouseButtonDown(button) ?? false;
+    public Vector2 LocalMousePosition => secondaryWindow?.GetMousePosition() ?? Vector2.Zero;
+    public bool IsLocalKeyPressed(KeyCode key) => secondaryWindow?.IsKeyPressed(key) ?? false;
+    public bool IsLocalKeyReleased(KeyCode key) => secondaryWindow?.IsKeyReleased(key) ?? false;
+    public bool IsLocalMouseButtonPressed(MouseButtonCode button) => secondaryWindow?.IsMouseButtonPressed(button) ?? false;
+    public bool IsLocalMouseButtonReleased(MouseButtonCode button) => secondaryWindow?.IsMouseButtonReleased(button) ?? false;
+    public float LocalMouseWheelMovement => secondaryWindow?.GetMouseWheelMovement() ?? 0f;
+}
 </file>
 
 <file path="Resources\Animation.cs">

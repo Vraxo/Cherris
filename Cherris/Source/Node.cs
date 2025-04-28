@@ -1,4 +1,11 @@
 ﻿using Spectre.Console;
+using System.Collections.Generic; // Added for Stack<T>
+using System; // Added for ArgumentException, InvalidOperationException, TypeLoadException
+using System.Linq; // Added for Linq methods
+using System.Reflection; // Added for reflection
+using YamlDotNet.Serialization; // Added for Yaml
+using YamlDotNet.Serialization.NamingConventions; // Added for Yaml Naming Conventions
+using System.IO; // Added for File IO
 
 namespace Cherris;
 
@@ -21,21 +28,23 @@ public class Node
     public List<Node> Children { get; set; } = [];
     public ProcessMode ProcessingMode = ProcessMode.Inherit;
 
+    private bool fieldActive = true;
+
     public bool Active
     {
-        get;
+        get => fieldActive;
 
         set
         {
-            if (field == value)
+            if (fieldActive == value)
             {
                 return;
             }
 
-            field = value;
-            ActiveChanged?.Invoke(this, Active);
+            fieldActive = value;
+            ActiveChanged?.Invoke(this, fieldActive);
         }
-    } = true;
+    }
 
     public string AbsolutePath
     {
@@ -43,34 +52,32 @@ public class Node
         {
             if (Parent is null)
             {
-                // This is the root node
+
                 return "/root/";
             }
 
             Stack<string> pathStack = new();
             Node? current = this;
 
-            // Traverse the hierarchy upwards, collecting names
+
             while (current is not null && current.Parent is not null)
             {
-                // Skip the root node's name (Parent will be null for root)
+
                 pathStack.Push(current.Name);
                 current = current.Parent;
             }
 
-            // Build the absolute Pathetic
+
             return $"/root/{string.Join("/", pathStack)}";
         }
     }
 
-    // Events
 
     public delegate void ActiveEvent(Node sender, bool active);
     public delegate void ChildEvent(Node sender, Node child);
     public event ActiveEvent? ActiveChanged;
     public event ChildEvent? ChildAdded;
 
-    // Main
 
     public virtual void Make() { }
 
@@ -90,7 +97,6 @@ public class Node
         Parent?.Children.Remove(this);
     }
 
-    // Process
 
     public virtual void ProcessBegin() { }
 
@@ -98,7 +104,6 @@ public class Node
 
     public virtual void ProcessEnd() { }
 
-    // Print children
 
     public void PrintChildren()
     {
@@ -122,7 +127,6 @@ public class Node
         }
     }
 
-    // Activation
 
     public virtual void Activate()
     {
@@ -144,7 +148,6 @@ public class Node
         }
     }
 
-    // Get node
 
     public T GetParent<T>() where T : Node
     {
@@ -155,12 +158,12 @@ public class Node
 
         return (T)this;
     }
-    
+
     public T GetNode<T>(string path) where T : Node
     {
         if (string.IsNullOrEmpty(path))
         {
-            throw new ArgumentException("Pathetic cannot be null or empty.", nameof(path));
+            throw new ArgumentException("Path cannot be null or empty.", nameof(path));
         }
 
         Node? currentNode;
@@ -182,7 +185,7 @@ public class Node
                 {
                     if (name == "..")
                     {
-                        // Traverse back to parent
+
                         currentNode = currentNode?.Parent;
                     }
                     else
@@ -205,7 +208,7 @@ public class Node
             {
                 if (name == "..")
                 {
-                    // Traverse back to parent
+
                     currentNode = currentNode?.Parent;
                 }
                 else if (name != "")
@@ -222,7 +225,7 @@ public class Node
 
         return currentNode as T ?? throw new InvalidOperationException("Node is not of the expected type.");
     }
-    
+
     public T? GetNodeOrNull<T>(string path) where T : Node
     {
         if (string.IsNullOrEmpty(path))
@@ -249,12 +252,12 @@ public class Node
                 {
                     if (name == "..")
                     {
-                        // Traverse back to parent
+
                         currentNode = currentNode?.Parent;
                     }
                     else
                     {
-                        currentNode = currentNode?.GetChild(name);
+                        currentNode = currentNode?.GetChildOrNull(name);
                     }
 
                     if (currentNode == null)
@@ -272,7 +275,7 @@ public class Node
             {
                 if (name == "..")
                 {
-                    // Traverse back to parent
+
                     currentNode = currentNode?.Parent;
                 }
                 else if (name != "")
@@ -290,7 +293,6 @@ public class Node
         return currentNode as T;
     }
 
-    // Get child
 
     public T? GetChild<T>(string name) where T : Node
     {
@@ -304,7 +306,7 @@ public class Node
 
         return null;
     }
-    
+
     public T? GetChild<T>() where T : Node
     {
         foreach (Node child in Children)
@@ -346,7 +348,6 @@ public class Node
         return null;
     }
 
-    // Add child
 
     public Node AddChild(Node node)
     {
@@ -371,5 +372,19 @@ public class Node
         ChildAdded?.Invoke(this, node);
 
         return node;
+    }
+
+    public WindowNode? GetOwningWindowNode()
+    {
+        Node? current = this;
+        while (current != null)
+        {
+            if (current is WindowNode windowNode)
+            {
+                return windowNode;
+            }
+            current = current.Parent;
+        }
+        return null;
     }
 }
