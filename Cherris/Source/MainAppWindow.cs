@@ -1,7 +1,9 @@
-﻿using System;
+﻿// No changes needed in MainAppWindow.cs regarding input handling
+// It already correctly updates the global Input state.
+using System;
 using Vortice.DirectWrite;
 using Vortice.Mathematics;
-using System.Numerics; // Required for Vector2
+using System.Numerics;
 
 namespace Cherris;
 
@@ -12,12 +14,13 @@ public class MainAppWindow : Direct2DAppWindow
     public MainAppWindow(string title = "My DirectUI App", int width = 800, int height = 600)
         : base(title, width, height)
     {
-        // Ensure global input actions are set up once
+
         Input.SetupDefaultActions();
     }
 
     protected override void DrawUIContent(DrawingContext context)
     {
+
         SceneTree.Instance.RenderScene(context);
     }
 
@@ -25,7 +28,7 @@ public class MainAppWindow : Direct2DAppWindow
     {
         Log.Info("MainAppWindow OnClose called.");
         Closed?.Invoke();
-        return base.OnClose(); // Use base implementation which returns true
+        return base.OnClose();
     }
 
     protected override void Cleanup()
@@ -38,6 +41,7 @@ public class MainAppWindow : Direct2DAppWindow
 
     protected override IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+
         int xPos = NativeMethods.GET_X_LPARAM(lParam);
         int yPos = NativeMethods.GET_Y_LPARAM(lParam);
         Vector2 mousePos = new Vector2(xPos, yPos);

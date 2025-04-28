@@ -54,6 +54,7 @@ public class Button : Control
 
     public Button()
     {
+
         Size = new(100, 26);
         Offset = Vector2.Zero;
         OriginPreset = OriginPreset.None;
@@ -63,6 +64,7 @@ public class Button : Control
 
     public override void Process()
     {
+
         base.Process();
 
         if (Disabled)
@@ -82,17 +84,7 @@ public class Button : Control
     {
 
 
-        bool enterPressed;
-        var owningWindowNode = GetOwningWindowNode();
-
-        if (owningWindowNode != null)
-        {
-            enterPressed = owningWindowNode.IsLocalKeyPressed(KeyCode.Enter);
-        }
-        else
-        {
-            enterPressed = Input.IsKeyPressed(KeyCode.Enter);
-        }
+        bool enterPressed = Input.IsKeyPressed(KeyCode.Enter);
 
         if (!Focused || !enterPressed)
         {
@@ -121,6 +113,7 @@ public class Button : Control
 
     private void HandleClicks()
     {
+
         bool isMouseOver = IsMouseOver();
         bool leftClickInvoked = false;
         bool rightClickInvoked = false;
@@ -143,23 +136,11 @@ public class Button : Control
 
     private bool HandleSingleClick(ref bool pressedState, MouseButtonCode button, ActionMode mode, Action<Button>? handler)
     {
+
         bool invoked = false;
         bool mouseOver = IsMouseOver();
-        bool buttonPressedThisFrame;
-        bool buttonReleasedThisFrame;
-
-        var owningWindowNode = GetOwningWindowNode();
-
-        if (owningWindowNode != null)
-        {
-            buttonPressedThisFrame = owningWindowNode.IsLocalMouseButtonPressed(button);
-            buttonReleasedThisFrame = owningWindowNode.IsLocalMouseButtonReleased(button);
-        }
-        else
-        {
-            buttonPressedThisFrame = Input.IsMouseButtonPressed(button);
-            buttonReleasedThisFrame = Input.IsMouseButtonReleased(button);
-        }
+        bool buttonPressedThisFrame = Input.IsMouseButtonPressed(button);
+        bool buttonReleasedThisFrame = Input.IsMouseButtonReleased(button);
 
 
         if (mouseOver && buttonPressedThisFrame && !Disabled)
@@ -214,6 +195,7 @@ public class Button : Control
 
     private void HandleHover(bool isMouseOver)
     {
+
         if (Disabled)
         {
             if (wasHovered)
@@ -245,26 +227,15 @@ public class Button : Control
 
     private void UpdateTheme(bool isMouseOver, bool isPressedForStayPressed)
     {
+
         if (Disabled)
         {
             Themes.Current = Themes.Disabled;
             return;
         }
 
-        bool isLeftDown;
-        bool isRightDown;
-        var owningWindowNode = GetOwningWindowNode();
-
-        if (owningWindowNode != null)
-        {
-            isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && owningWindowNode.IsLocalMouseButtonDown(MouseButtonCode.Left);
-            isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && owningWindowNode.IsLocalMouseButtonDown(MouseButtonCode.Right);
-        }
-        else
-        {
-            isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Left);
-            isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Right);
-        }
+        bool isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Left);
+        bool isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Right);
 
         bool isPhysicallyHeldDown = isMouseOver && (isLeftDown || isRightDown);
 
@@ -300,6 +271,7 @@ public class Button : Control
 
     public override void Draw(DrawingContext context)
     {
+
         if (!Visible) return;
 
         DrawBackground(context);
@@ -310,6 +282,7 @@ public class Button : Control
 
     private void DrawBackground(DrawingContext context)
     {
+
         var position = GlobalPosition - Origin;
         var size = ScaledSize;
         var bounds = new Rect(position.X, position.Y, size.X, size.Y);
@@ -319,6 +292,7 @@ public class Button : Control
 
     private void DrawIcon(DrawingContext context)
     {
+
         if (Icon is null || context.RenderTarget is null)
         {
             return;
@@ -330,6 +304,7 @@ public class Button : Control
 
     private void DrawText(DrawingContext context)
     {
+
         if (Themes.Current is null) return;
 
         var position = GlobalPosition - Origin;
@@ -357,6 +332,7 @@ public class Button : Control
 
     private void ResizeToFitText()
     {
+
         if (!AutoWidth || Themes?.Current is null)
         {
             return;
@@ -368,6 +344,7 @@ public class Button : Control
 
     private void ClipDisplayedText()
     {
+
         if (!ClipText || string.IsNullOrEmpty(Text) || Themes?.Current is null)
         {
             displayedText = Text;
@@ -382,6 +359,7 @@ public class Button : Control
 
     private string GetTextClippedWithEllipsis(string input)
     {
+
 
         if (input.Length > Ellipsis.Length)
         {

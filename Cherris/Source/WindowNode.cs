@@ -1,17 +1,17 @@
 ﻿using System;
 using System.Numerics;
-using System.Collections.Generic; // Added for List
+using System.Collections.Generic;
 
 namespace Cherris;
 
 public class WindowNode : Node2D
 {
-    // Make secondaryWindow protected so ModalWindowNode can assign to it
+
     protected SecondaryWindow? secondaryWindow;
     private string windowTitle = "Cherris Window";
     private int windowWidth = 640;
     private int windowHeight = 480;
-    // Make isQueuedForFree protected so ModalWindowNode can check it if needed
+
     protected bool isQueuedForFree = false;
 
     public string Title
@@ -50,14 +50,16 @@ public class WindowNode : Node2D
 
     public override void Make()
     {
+
         base.Make();
         InitializeWindow();
     }
 
     public override void Process()
     {
+
         base.Process();
-        secondaryWindow?.UpdateLocalInput();
+
 
         if (isQueuedForFree)
         {
@@ -65,9 +67,7 @@ public class WindowNode : Node2D
         }
     }
 
-    // Make InitializeWindow virtual if ModalWindowNode needs to override
-    // or change its behavior significantly, otherwise protected might be fine.
-    // For now, ModalWindowNode bypasses it in Make(), so it doesn't strictly matter.
+
     private void InitializeWindow()
     {
         if (secondaryWindow is not null)
@@ -110,18 +110,19 @@ public class WindowNode : Node2D
 
     public void QueueFree()
     {
+
         isQueuedForFree = true;
     }
 
 
-    // Change access modifier to protected
+
     protected virtual void FreeInternal()
     {
         Log.Info($"Freeing WindowNode '{Name}' and its associated window.");
         secondaryWindow?.Close();
 
         secondaryWindow = null;
-        base.Free(); // Call Node.Free() to remove from parent etc.
+        base.Free();
     }
 
 
@@ -172,12 +173,6 @@ public class WindowNode : Node2D
     public SecondaryWindow? GetWindowHandle() => secondaryWindow;
 
 
-    public bool IsLocalKeyDown(KeyCode key) => secondaryWindow?.IsKeyDown(key) ?? false;
-    public bool IsLocalMouseButtonDown(MouseButtonCode button) => secondaryWindow?.IsMouseButtonDown(button) ?? false;
-    public Vector2 LocalMousePosition => secondaryWindow?.GetMousePosition() ?? Vector2.Zero;
-    public bool IsLocalKeyPressed(KeyCode key) => secondaryWindow?.IsKeyPressed(key) ?? false;
-    public bool IsLocalKeyReleased(KeyCode key) => secondaryWindow?.IsKeyReleased(key) ?? false;
-    public bool IsLocalMouseButtonPressed(MouseButtonCode button) => secondaryWindow?.IsMouseButtonPressed(button) ?? false;
-    public bool IsLocalMouseButtonReleased(MouseButtonCode button) => secondaryWindow?.IsMouseButtonReleased(button) ?? false;
-    public float LocalMouseWheelMovement => secondaryWindow?.GetMouseWheelMovement() ?? 0f;
+    public Vector2 LocalMousePosition => secondaryWindow?.GetLocalMousePosition() ?? Input.MousePosition;
+
 }

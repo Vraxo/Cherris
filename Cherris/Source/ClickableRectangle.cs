@@ -1,4 +1,4 @@
-﻿using System.Numerics; // Required for Vector2
+﻿using System.Numerics;
 
 namespace Cherris;
 
@@ -6,6 +6,7 @@ public abstract class ClickableRectangle : Clickable
 {
     public override bool IsMouseOver()
     {
+
         var owningWindowNode = GetOwningWindowNode();
         Vector2 mousePosition;
 
