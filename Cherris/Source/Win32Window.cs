@@ -35,7 +35,7 @@ public abstract class Win32Window : IDisposable
         Height = _initialHeight;
         _windowClassName = className ?? ("Win32Window_" + Guid.NewGuid().ToString("N"));
         _wndProcDelegate = WindowProcedure;
-        Input.SetupDefaultActions();
+
     }
 
     public virtual bool TryCreateWindow(IntPtr ownerHwnd = default, uint? styleOverride = null)
@@ -93,7 +93,7 @@ public abstract class Win32Window : IDisposable
             windowStyle,
             NativeMethods.CW_USEDEFAULT, NativeMethods.CW_USEDEFAULT,
             _initialWidth, _initialHeight,
-            ownerHwnd, // Use the provided owner handle
+            ownerHwnd,
             IntPtr.Zero,
             _hInstance,
             GCHandle.ToIntPtr(_gcHandle));
@@ -133,43 +133,6 @@ public abstract class Win32Window : IDisposable
 
 
         return Initialize();
-    }
-
-    public void ProcessMessages()
-    {
-        while (NativeMethods.PeekMessage(out NativeMethods.MSG msg, IntPtr.Zero, 0, 0, NativeMethods.PM_REMOVE))
-        {
-            if (msg.message == NativeMethods.WM_QUIT)
-            {
-                Log.Info("WM_QUIT received, signaling application close.");
-                IsOpen = false; // Signal main loop to exit if this was the main window's queue
-                break;
-            }
-
-
-            if (msg.hwnd == Handle || GetTopLevelParent(msg.hwnd) == Handle || msg.hwnd == IntPtr.Zero)
-            {
-                NativeMethods.TranslateMessage(ref msg);
-                NativeMethods.DispatchMessage(ref msg);
-            }
-            else
-            {
-
-                Log.Info($"Skipping message dispatch for HWND {msg.hwnd} not belonging to {Handle}");
-            }
-        }
-    }
-
-    private static IntPtr GetTopLevelParent(IntPtr hWnd)
-    {
-        IntPtr parent = hWnd;
-        IntPtr lastParent;
-        do
-        {
-            lastParent = parent;
-            parent = NativeMethods.GetParent(lastParent);
-        } while (parent != IntPtr.Zero);
-        return lastParent;
     }
 
 
@@ -248,11 +211,12 @@ public abstract class Win32Window : IDisposable
         return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
+
     protected virtual IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         int xPos = NativeMethods.GET_X_LPARAM(lParam);
         int yPos = NativeMethods.GET_Y_LPARAM(lParam);
-        Vector2 mousePos = new Vector2(xPos, yPos);
+
 
         switch (msg)
         {
@@ -268,87 +232,51 @@ public abstract class Win32Window : IDisposable
                 return IntPtr.Zero;
 
             case NativeMethods.WM_MOUSEMOVE:
-
-                if (this is not ModalSecondaryWindow) Input.UpdateMousePosition(mousePos);
                 OnMouseMove(xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_LBUTTONDOWN:
-
-                if (this is not ModalSecondaryWindow) Input.UpdateMouseButton(MouseButtonCode.Left, true);
                 OnMouseDown(MouseButton.Left, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_LBUTTONUP:
-
-                if (this is not ModalSecondaryWindow) Input.UpdateMouseButton(MouseButtonCode.Left, false);
                 OnMouseUp(MouseButton.Left, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_RBUTTONDOWN:
-
-                if (this is not ModalSecondaryWindow) Input.UpdateMouseButton(MouseButtonCode.Right, true);
                 OnMouseDown(MouseButton.Right, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_RBUTTONUP:
-
-                if (this is not ModalSecondaryWindow) Input.UpdateMouseButton(MouseButtonCode.Right, false);
                 OnMouseUp(MouseButton.Right, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_MBUTTONDOWN:
-
-                if (this is not ModalSecondaryWindow) Input.UpdateMouseButton(MouseButtonCode.Middle, true);
                 OnMouseDown(MouseButton.Middle, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_MBUTTONUP:
-
-                if (this is not ModalSecondaryWindow) Input.UpdateMouseButton(MouseButtonCode.Middle, false);
                 OnMouseUp(MouseButton.Middle, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_XBUTTONDOWN:
                 int xButton1 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
-
-                if (this is not ModalSecondaryWindow)
-                {
-                    if (xButton1 == NativeMethods.XBUTTON1) Input.UpdateMouseButton(MouseButtonCode.Side, true);
-                    if (xButton1 == NativeMethods.XBUTTON2) Input.UpdateMouseButton(MouseButtonCode.Extra, true);
-                }
                 OnMouseDown(xButton1 == NativeMethods.XBUTTON1 ? MouseButton.XButton1 : MouseButton.XButton2, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_XBUTTONUP:
                 int xButton2 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
-
-                if (this is not ModalSecondaryWindow)
-                {
-                    if (xButton2 == NativeMethods.XBUTTON1) Input.UpdateMouseButton(MouseButtonCode.Side, false);
-                    if (xButton2 == NativeMethods.XBUTTON2) Input.UpdateMouseButton(MouseButtonCode.Extra, false);
-                }
                 OnMouseUp(xButton2 == NativeMethods.XBUTTON1 ? MouseButton.XButton1 : MouseButton.XButton2, xPos, yPos);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_MOUSEWHEEL:
                 short wheelDelta = NativeMethods.GET_WHEEL_DELTA_WPARAM(wParam);
-
-                if (this is not ModalSecondaryWindow) Input.UpdateMouseWheel((float)wheelDelta / NativeMethods.WHEEL_DELTA);
                 OnMouseWheel(wheelDelta);
                 return IntPtr.Zero;
 
             case NativeMethods.WM_KEYDOWN:
             case NativeMethods.WM_SYSKEYDOWN:
                 int vkCodeDown = (int)wParam;
-
-                if (this is not ModalSecondaryWindow)
-                {
-                    if (Enum.IsDefined(typeof(KeyCode), vkCodeDown))
-                    {
-                        Input.UpdateKey((KeyCode)vkCodeDown, true);
-                    }
-                }
                 OnKeyDown(vkCodeDown);
 
 
@@ -361,14 +289,6 @@ public abstract class Win32Window : IDisposable
             case NativeMethods.WM_KEYUP:
             case NativeMethods.WM_SYSKEYUP:
                 int vkCodeUp = (int)wParam;
-
-                if (this is not ModalSecondaryWindow)
-                {
-                    if (Enum.IsDefined(typeof(KeyCode), vkCodeUp))
-                    {
-                        Input.UpdateKey((KeyCode)vkCodeUp, false);
-                    }
-                }
                 OnKeyUp(vkCodeUp);
                 return IntPtr.Zero;
 
@@ -383,10 +303,15 @@ public abstract class Win32Window : IDisposable
                 Log.Info($"WM_DESTROY for {hWnd} ('{Title}').");
                 OnDestroy();
 
+
                 if (this is MainAppWindow)
                 {
                     Log.Info("Main window destroyed, posting quit message.");
                     NativeMethods.PostQuitMessage(0);
+                }
+                else if (this is SecondaryWindow secWin)
+                {
+                    ApplicationCore.Instance.UnregisterSecondaryWindow(secWin);
                 }
                 return IntPtr.Zero;
 
@@ -479,7 +404,7 @@ public abstract class Win32Window : IDisposable
                 Log.Info($"Requesting destroy for window {_hwnd} ('{Title}') during Dispose...");
 
 
-                NativeMethods.DestroyWindow(_hwnd);
+                NativeMethods.DestroyWindow(_hwnd); // Should trigger WM_DESTROY/NC_DESTROY
 
             }
             else
@@ -492,8 +417,9 @@ public abstract class Win32Window : IDisposable
                 }
             }
 
+
             _isDisposed = true;
-            IsOpen = false;
+            IsOpen = false; // Ensure state is updated even if called directly
             Log.Info($"Win32Window '{Title}' disposed.");
         }
     }

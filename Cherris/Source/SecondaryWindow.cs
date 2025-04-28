@@ -10,6 +10,9 @@ public class SecondaryWindow : Direct2DAppWindow
     private readonly HashSet<KeyCode> currentKeysDown = [];
     private readonly HashSet<MouseButtonCode> currentMouseButtonsDown = [];
     private Vector2 currentMousePosition = Vector2.Zero;
+    private float currentMouseWheelDelta = 0f; // Added for local wheel state
+    private readonly HashSet<KeyCode> previousKeysDown = []; // Added for local pressed/released
+    private readonly HashSet<MouseButtonCode> previousMouseButtonsDown = []; // Added for local pressed/released
 
     public SecondaryWindow(string title, int width, int height, WindowNode owner)
         : base(title, width, height)
@@ -29,7 +32,7 @@ public class SecondaryWindow : Direct2DAppWindow
         Log.Info($"SecondaryWindow '{Title}' OnClose called.");
 
 
-        ownerNode?.Free();
+        ownerNode?.QueueFree(); // Request the node be freed
 
 
         return base.OnClose();
@@ -38,9 +41,26 @@ public class SecondaryWindow : Direct2DAppWindow
     protected override void Cleanup()
     {
         Log.Info($"SecondaryWindow '{Title}' Cleanup starting.");
-        ApplicationCore.Instance.UnregisterSecondaryWindow(this);
+
         base.Cleanup();
         Log.Info($"SecondaryWindow '{Title}' Cleanup finished.");
+    }
+
+
+    public void UpdateLocalInput()
+    {
+        previousMouseButtonsDown.Clear();
+        foreach (var button in currentMouseButtonsDown)
+        {
+            previousMouseButtonsDown.Add(button);
+        }
+
+        previousKeysDown.Clear();
+        foreach (var key in currentKeysDown)
+        {
+            previousKeysDown.Add(key);
+        }
+        currentMouseWheelDelta = 0f;
     }
 
     protected override IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -87,6 +107,11 @@ public class SecondaryWindow : Direct2DAppWindow
                 if (xButton2 == NativeMethods.XBUTTON2) currentMouseButtonsDown.Remove(MouseButtonCode.Extra);
                 break;
 
+            case NativeMethods.WM_MOUSEWHEEL:
+                short wheelDelta = NativeMethods.GET_WHEEL_DELTA_WPARAM(wParam);
+                currentMouseWheelDelta = (float)wheelDelta / NativeMethods.WHEEL_DELTA;
+                break;
+
             case NativeMethods.WM_KEYDOWN:
             case NativeMethods.WM_SYSKEYDOWN:
                 int vkCodeDown = (int)wParam;
@@ -106,10 +131,19 @@ public class SecondaryWindow : Direct2DAppWindow
                 break;
         }
 
+
         return base.HandleMessage(hWnd, msg, wParam, lParam);
     }
+
 
     public bool IsKeyDown(KeyCode key) => currentKeysDown.Contains(key);
     public bool IsMouseButtonDown(MouseButtonCode button) => currentMouseButtonsDown.Contains(button);
     public Vector2 GetMousePosition() => currentMousePosition;
+
+    public bool IsKeyPressed(KeyCode key) => currentKeysDown.Contains(key) && !previousKeysDown.Contains(key);
+    public bool IsKeyReleased(KeyCode key) => !currentKeysDown.Contains(key) && previousKeysDown.Contains(key);
+    public bool IsMouseButtonPressed(MouseButtonCode button) => currentMouseButtonsDown.Contains(button) && !previousMouseButtonsDown.Contains(button);
+    public bool IsMouseButtonReleased(MouseButtonCode button) => !currentMouseButtonsDown.Contains(button) && previousMouseButtonsDown.Contains(button);
+    public float GetMouseWheelMovement() => currentMouseWheelDelta;
+
 }

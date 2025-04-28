@@ -9,6 +9,7 @@ public class WindowNode : Node
     private string windowTitle = "Cherris Window";
     private int windowWidth = 640;
     private int windowHeight = 480;
+    private bool isQueuedForFree = false;
 
     public string Title
     {
@@ -17,7 +18,7 @@ public class WindowNode : Node
         {
             if (windowTitle == value) return;
             windowTitle = value;
-
+            // TODO: Add method to update existing window title if needed
         }
     }
 
@@ -28,7 +29,7 @@ public class WindowNode : Node
         {
             if (windowWidth == value) return;
             windowWidth = value;
-
+            // TODO: Add method to resize existing window if needed
         }
     }
 
@@ -39,7 +40,7 @@ public class WindowNode : Node
         {
             if (windowHeight == value) return;
             windowHeight = value;
-
+            // TODO: Add method to resize existing window if needed
         }
     }
 
@@ -47,6 +48,17 @@ public class WindowNode : Node
     {
         base.Make();
         InitializeWindow();
+    }
+
+    public override void Process()
+    {
+        base.Process();
+        secondaryWindow?.UpdateLocalInput(); // Update previous frame state
+
+        if (isQueuedForFree)
+        {
+            FreeInternal();
+        }
     }
 
     private void InitializeWindow()
@@ -71,7 +83,7 @@ public class WindowNode : Node
             if (!secondaryWindow.InitializeWindowAndGraphics())
             {
                 Log.Error($"WindowNode '{Name}' failed to initialize window graphics.");
-                secondaryWindow.Dispose();
+                secondaryWindow.Dispose(); // Clean up partially created window
                 secondaryWindow = null;
                 return;
             }
@@ -87,13 +99,32 @@ public class WindowNode : Node
         }
     }
 
-    public override void Free()
+
+    public void QueueFree()
+    {
+        isQueuedForFree = true;
+    }
+
+
+    private void FreeInternal()
     {
         Log.Info($"Freeing WindowNode '{Name}' and its associated window.");
-        secondaryWindow?.Close();
-        secondaryWindow?.Dispose();
-        secondaryWindow = null;
-        base.Free();
+        secondaryWindow?.Close(); // Request OS window close
+                                  // Actual disposal happens via WM_NCDESTROY -> Unregister -> Win32Window.Dispose
+        secondaryWindow = null; // Remove reference
+        base.Free(); // Free the node itself from the tree
+    }
+
+
+    public override void Free()
+    {
+        // This override prevents direct freeing. Use QueueFree() instead.
+        // The actual cleanup happens in FreeInternal() when processed.
+        if (!isQueuedForFree)
+        {
+            Log.Warning($"Direct call to Free() on WindowNode '{Name}' detected. Use QueueFree() instead.");
+            QueueFree();
+        }
     }
 
     internal void RenderChildren(DrawingContext context)
@@ -120,27 +151,23 @@ public class WindowNode : Node
         }
 
 
-        foreach (Node child in node.Children)
+        var childrenToRender = new List<Node>(node.Children); // Copy list for safe iteration
+        foreach (Node child in childrenToRender)
         {
             RenderNodeRecursive(child, context);
         }
     }
 
-    public bool IsLocalKeyDown(KeyCode key)
-    {
 
-        return secondaryWindow?.IsKeyDown(key) ?? false;
-    }
+    public SecondaryWindow? GetWindowHandle() => secondaryWindow;
 
-    public bool IsLocalMouseButtonDown(MouseButtonCode button)
-    {
-
-        return secondaryWindow?.IsMouseButtonDown(button) ?? false;
-    }
-
-    public Vector2 LocalMousePosition
-    {
-
-        get => secondaryWindow?.GetMousePosition() ?? Vector2.Zero;
-    }
+    // Convenience methods to access local input state
+    public bool IsLocalKeyDown(KeyCode key) => secondaryWindow?.IsKeyDown(key) ?? false;
+    public bool IsLocalMouseButtonDown(MouseButtonCode button) => secondaryWindow?.IsMouseButtonDown(button) ?? false;
+    public Vector2 LocalMousePosition => secondaryWindow?.GetMousePosition() ?? Vector2.Zero;
+    public bool IsLocalKeyPressed(KeyCode key) => secondaryWindow?.IsKeyPressed(key) ?? false;
+    public bool IsLocalKeyReleased(KeyCode key) => secondaryWindow?.IsKeyReleased(key) ?? false;
+    public bool IsLocalMouseButtonPressed(MouseButtonCode button) => secondaryWindow?.IsMouseButtonPressed(button) ?? false;
+    public bool IsLocalMouseButtonReleased(MouseButtonCode button) => secondaryWindow?.IsMouseButtonReleased(button) ?? false;
+    public float LocalMouseWheelMovement => secondaryWindow?.GetMouseWheelMovement() ?? 0f;
 }

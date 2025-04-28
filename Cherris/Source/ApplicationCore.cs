@@ -100,10 +100,10 @@ public sealed class ApplicationCore
         while (mainWindow != null && mainWindow.IsOpen)
         {
 
-            ProcessAllWindowsMessages();
+            ProcessSystemMessages();
 
 
-            ClickServer.Instance.Process();
+            ClickServer.Instance.Process(); // Still uses global Input
             SceneTree.Instance.Process();
 
 
@@ -112,25 +112,28 @@ public sealed class ApplicationCore
             RenderSecondaryWindows();
 
 
-            Input.Update();
+            Input.Update(); // Clears previous frame's input state for global Input
 
         }
     }
 
 
-    private void ProcessAllWindowsMessages()
+    private void ProcessSystemMessages()
     {
-        mainWindow?.ProcessMessages();
-
-        var windowsToProcess = new List<SecondaryWindow>(secondaryWindows);
-        foreach (var window in windowsToProcess)
+        while (NativeMethods.PeekMessage(out NativeMethods.MSG msg, IntPtr.Zero, 0, 0, NativeMethods.PM_REMOVE))
         {
-            if (window.IsOpen)
+            if (msg.message == NativeMethods.WM_QUIT)
             {
-                window.ProcessMessages();
+                Log.Info("WM_QUIT received, signaling application close.");
+                mainWindow?.Close(); // Signal main window to close if not already
+                break; // Exit message loop processing for this frame
             }
+
+            NativeMethods.TranslateMessage(ref msg);
+            NativeMethods.DispatchMessage(ref msg); // Sends to the correct WindowProcedure
         }
     }
+
 
     private void RenderSecondaryWindows()
     {
@@ -171,10 +174,10 @@ public sealed class ApplicationCore
         var windowsToClose = new List<SecondaryWindow>(secondaryWindows);
         foreach (var window in windowsToClose)
         {
-            window.Close();
-            window.Dispose();
+            window.Close(); // Request close
+            // Dispose happens when WM_NCDESTROY is processed
         }
-        secondaryWindows.Clear();
+        // Don't Clear() here, let them remove themselves on NCDESTROY
     }
 
     internal void RegisterSecondaryWindow(SecondaryWindow window)
