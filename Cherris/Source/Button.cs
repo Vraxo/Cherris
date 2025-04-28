@@ -16,6 +16,7 @@ public class Button : Control
     private bool wasHovered = false;
     private string displayedText = "";
     private string _text = "";
+    private static bool _verboseInputLog = false;
 
     public Vector2 TextOffset { get; set; } = Vector2.Zero;
     public HAlignment TextHAlignment { get; set; } = HAlignment.Center;
@@ -59,6 +60,7 @@ public class Button : Control
         OriginPreset = OriginPreset.None;
 
         WasDisabled += (button) => Themes.Current = Disabled ? Themes.Disabled : Themes.Normal;
+
     }
 
     public override void Process()
@@ -67,20 +69,35 @@ public class Button : Control
 
         if (Disabled)
         {
+
+            if (Themes.Current != Themes.Disabled) Themes.Current = Themes.Disabled;
+
+            if (wasHovered) { wasHovered = false; MouseExited?.Invoke(this); }
+            pressedLeft = false;
+            pressedRight = false;
             return;
         }
 
 
         HandleClicks();
-        HandleKeyboardInput();
 
+
+
+        UpdateTheme();
     }
 
     protected virtual void OnEnterPressed() { }
 
+
     private void HandleKeyboardInput()
     {
-        if (!Focused || !Input.IsKeyPressed(KeyCode.Enter))
+
+        if (!Focused || GetOwningWindowNode() != null)
+        {
+            return;
+        }
+
+        if (!Input.IsKeyPressed(KeyCode.Enter))
         {
             return;
         }
@@ -108,40 +125,58 @@ public class Button : Control
     private void HandleClicks()
     {
         bool isMouseOver = IsMouseOver();
+        WindowNode? ownerWindow = GetOwningWindowNode();
+        Log.Info($"Button '{Name}' HandleClicks. IsMouseOver={isMouseOver}. OwnerWindow={(ownerWindow?.Name ?? "None")}", _verboseInputLog);
+
+
         bool leftClickInvoked = false;
         bool rightClickInvoked = false;
 
 
         if (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both)
         {
-            leftClickInvoked = HandleSingleClick(ref pressedLeft, MouseButtonCode.Left, LeftClickActionMode, LeftClicked);
+            leftClickInvoked = HandleSingleClick(ownerWindow, ref pressedLeft, MouseButtonCode.Left, LeftClickActionMode, LeftClicked);
         }
 
         if (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both)
         {
-            rightClickInvoked = HandleSingleClick(ref pressedRight, MouseButtonCode.Right, RightClickActionMode, RightClicked);
+            rightClickInvoked = HandleSingleClick(ownerWindow, ref pressedRight, MouseButtonCode.Right, RightClickActionMode, RightClicked);
         }
 
         HandleHover(isMouseOver);
-
-        UpdateTheme(isMouseOver, pressedLeft || pressedRight);
     }
 
-    private bool HandleSingleClick(ref bool pressedState, MouseButtonCode button, ActionMode mode, Action<Button>? handler)
+    private bool HandleSingleClick(WindowNode? ownerWindow, ref bool pressedState, MouseButtonCode button, ActionMode mode, Action<Button>? handler)
     {
         bool invoked = false;
         bool mouseOver = IsMouseOver();
-        bool buttonPressedThisFrame = Input.IsMouseButtonPressed(button);
-        bool buttonReleasedThisFrame = Input.IsMouseButtonReleased(button);
+
+
+        bool buttonPressedThisFrame;
+        bool buttonReleasedThisFrame;
+        if (ownerWindow != null)
+        {
+            buttonPressedThisFrame = ownerWindow.IsLocalMouseButtonPressed(button);
+            buttonReleasedThisFrame = ownerWindow.IsLocalMouseButtonReleased(button);
+            Log.Info($"Button '{Name}' ({button}) LocalInput: Pressed={buttonPressedThisFrame}, Released={buttonReleasedThisFrame}", _verboseInputLog && (buttonPressedThisFrame || buttonReleasedThisFrame));
+        }
+        else
+        {
+            buttonPressedThisFrame = Input.IsMouseButtonPressed(button);
+            buttonReleasedThisFrame = Input.IsMouseButtonReleased(button);
+            Log.Info($"Button '{Name}' ({button}) GlobalInput: Pressed={buttonPressedThisFrame}, Released={buttonReleasedThisFrame}", _verboseInputLog && (buttonPressedThisFrame || buttonReleasedThisFrame));
+        }
 
 
         if (mouseOver && buttonPressedThisFrame && !Disabled)
         {
+            Log.Info($"Button '{Name}' ({button}) Pressed Over Control.", _verboseInputLog);
             pressedState = true;
             HandleClickFocus();
 
             if (mode == ActionMode.Press)
             {
+                Log.Info($"Button '{Name}' ({button}) Invoking handler on Press.", _verboseInputLog);
                 handler?.Invoke(this);
                 ClickSound?.Play(AudioBus);
                 invoked = true;
@@ -151,16 +186,28 @@ public class Button : Control
 
         if (buttonReleasedThisFrame)
         {
+            Log.Info($"Button '{Name}' ({button}) Button released this frame. WasPressedState={pressedState}", _verboseInputLog);
             if (pressedState)
             {
                 if (!Disabled && mouseOver && mode == ActionMode.Release)
                 {
+                    Log.Info($"Button '{Name}' ({button}) Invoking handler on Release.", _verboseInputLog);
                     handler?.Invoke(this);
                     ClickSound?.Play(AudioBus);
                     invoked = true;
                 }
 
-                pressedState = false;
+
+                if (!StayPressed)
+                {
+                    Log.Info($"Button '{Name}' ({button}) Resetting pressed state (Not StayPressed).", _verboseInputLog);
+                    pressedState = false;
+                }
+                else
+                {
+
+                    Log.Info($"Button '{Name}' ({button}) Maintaining pressed state (StayPressed).", _verboseInputLog);
+                }
             }
         }
 
@@ -185,6 +232,7 @@ public class Button : Control
         {
             if (!wasHovered)
             {
+                Log.Info($"Button '{Name}' Mouse Entered.", _verboseInputLog);
                 MouseEntered?.Invoke(this);
                 HoverSound?.Play(AudioBus);
                 wasHovered = true;
@@ -194,30 +242,57 @@ public class Button : Control
         {
             if (wasHovered)
             {
+                Log.Info($"Button '{Name}' Mouse Exited.", _verboseInputLog);
                 wasHovered = false;
                 MouseExited?.Invoke(this);
+            }
+
+            if (!StayPressed)
+            {
+                if (pressedLeft || pressedRight) Log.Info($"Button '{Name}' Resetting pressed state on mouse exit.", _verboseInputLog);
+                pressedLeft = false;
+                pressedRight = false;
             }
         }
     }
 
-    private void UpdateTheme(bool isMouseOver, bool isPressedForStayPressed)
+    private void UpdateTheme()
     {
         if (Disabled)
         {
-            Themes.Current = Themes.Disabled;
+            if (Themes.Current != Themes.Disabled) Themes.Current = Themes.Disabled;
             return;
         }
 
-        bool isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Left);
-        bool isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Right);
-        bool isPhysicallyHeldDown = isMouseOver && (isLeftDown || isRightDown);
+        bool isMouseOver = IsMouseOver();
+        WindowNode? ownerWindow = GetOwningWindowNode();
 
 
-        if (isPressedForStayPressed && StayPressed)
+        bool isLeftDown;
+        bool isRightDown;
+        if (ownerWindow != null)
         {
-            Themes.Current = Themes.Pressed;
+            isLeftDown = ownerWindow.IsLocalMouseButtonDown(MouseButtonCode.Left);
+            isRightDown = ownerWindow.IsLocalMouseButtonDown(MouseButtonCode.Right);
         }
-        else if (isPhysicallyHeldDown)
+        else
+        {
+            isLeftDown = Input.IsMouseButtonDown(MouseButtonCode.Left);
+            isRightDown = Input.IsMouseButtonDown(MouseButtonCode.Right);
+        }
+
+        bool isPhysicallyHeldDown = isMouseOver &&
+            ((Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && isLeftDown ||
+             (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && isRightDown);
+
+
+        bool isEffectivelyPressed = (pressedLeft || pressedRight) || isPhysicallyHeldDown;
+
+
+
+        var oldTheme = Themes.Current;
+
+        if (isEffectivelyPressed)
         {
             Themes.Current = Themes.Pressed;
         }
@@ -233,12 +308,15 @@ public class Button : Control
         {
             Themes.Current = Themes.Normal;
         }
+
+        if (oldTheme != Themes.Current) Log.Info($"Button '{Name}' Theme changed to {Themes.Current.GetType().Name}", _verboseInputLog);
     }
 
     protected override void OnThemeFileChanged(string themeFile)
     {
 
         Log.Warning($"OnThemeFileChanged not fully implemented for Button: {themeFile}");
+
     }
 
 
@@ -269,6 +347,7 @@ public class Button : Control
 
 
         Log.Warning("DrawIcon is not implemented.");
+
     }
 
     private void DrawText(DrawingContext context)
@@ -300,6 +379,7 @@ public class Button : Control
 
     private void ResizeToFitText()
     {
+
         if (!AutoWidth || Themes?.Current is null)
         {
             return;
@@ -307,10 +387,13 @@ public class Button : Control
 
 
         Log.Warning("ResizeToFitText requires DirectWrite implementation.");
+
+
     }
 
     private void ClipDisplayedText()
     {
+
         if (!ClipText || string.IsNullOrEmpty(Text) || Themes?.Current is null)
         {
             displayedText = Text;
@@ -320,15 +403,18 @@ public class Button : Control
 
         Log.Warning("ClipDisplayedText requires DirectWrite implementation.");
 
+
+
+
         displayedText = Text;
     }
 
     private string GetTextClippedWithEllipsis(string input)
     {
 
-        if (input.Length > Ellipsis.Length)
+        if (input.Length > Ellipsis.Length + 5)
         {
-            return input.Substring(0, input.Length - Ellipsis.Length) + Ellipsis;
+            return input.Substring(0, input.Length - Ellipsis.Length - 2) + Ellipsis;
         }
         return input;
     }

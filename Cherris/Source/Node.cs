@@ -20,6 +20,8 @@ public class Node
     public Node? Parent { get; set; } = null;
     public List<Node> Children { get; set; } = [];
     public ProcessMode ProcessingMode = ProcessMode.Inherit;
+    private bool isQueuedForFree = false; // Moved from WindowNode for general use
+
 
     public bool Active
     {
@@ -43,34 +45,32 @@ public class Node
         {
             if (Parent is null)
             {
-                // This is the root node
+
                 return "/root/";
             }
 
             Stack<string> pathStack = new();
             Node? current = this;
 
-            // Traverse the hierarchy upwards, collecting names
+
             while (current is not null && current.Parent is not null)
             {
-                // Skip the root node's name (Parent will be null for root)
+
                 pathStack.Push(current.Name);
                 current = current.Parent;
             }
 
-            // Build the absolute Pathetic
+
             return $"/root/{string.Join("/", pathStack)}";
         }
     }
 
-    // Events
 
     public delegate void ActiveEvent(Node sender, bool active);
     public delegate void ChildEvent(Node sender, Node child);
     public event ActiveEvent? ActiveChanged;
     public event ChildEvent? ChildAdded;
 
-    // Main
 
     public virtual void Make() { }
 
@@ -80,25 +80,62 @@ public class Node
 
     public virtual void Free()
     {
+        // Direct freeing is generally discouraged for nodes that manage external resources (like WindowNode).
+        // Use QueueFree() for those. This is the final cleanup.
+        if (!isQueuedForFree) // Prevent double execution if QueueFree was used
+        {
+            FreeInternal();
+        }
+    }
+
+
+    public void QueueFree()
+    {
+        if (!isQueuedForFree)
+        {
+            isQueuedForFree = true;
+            // Optional: Add to a SceneTree queue for processing at end of frame
+        }
+    }
+
+
+    private void FreeInternal()
+    {
+        Log.Info($"FreeInternal called for '{Name}' ({GetType().Name})", this is WindowNode); // Log only for windows for now
         List<Node> childrenToDestroy = new(Children);
 
         foreach (Node child in childrenToDestroy)
         {
-            child.Free();
+            child.QueueFree(); // Children should also be queued
+            child.FreeInternal(); // Process their internal freeing immediately if needed
         }
+        Children.Clear(); // Clear children list after they are processed
 
         Parent?.Children.Remove(this);
+        Parent = null; // Break parent link
+
+        // Specific cleanup for WindowNode moved there
     }
 
-    // Process
 
     public virtual void ProcessBegin() { }
 
-    public virtual void Process() { }
+    public virtual void Process()
+    {
+        // Process queued free requests at the start of the next frame's process
+        if (isQueuedForFree)
+        {
+            FreeInternal();
+            // Important: If FreeInternal removes the node from its parent,
+            // subsequent processing (like ProcessEnd or child processing) might fail.
+            // Consider adding logic to SceneTree to handle removal after the full Process cycle.
+            // For now, this basic implementation might suffice if children are handled correctly.
+            return; // Stop processing this node further if freed
+        }
+    }
 
     public virtual void ProcessEnd() { }
 
-    // Print children
 
     public void PrintChildren()
     {
@@ -122,7 +159,6 @@ public class Node
         }
     }
 
-    // Activation
 
     public virtual void Activate()
     {
@@ -144,7 +180,6 @@ public class Node
         }
     }
 
-    // Get node
 
     public T GetParent<T>() where T : Node
     {
@@ -155,74 +190,31 @@ public class Node
 
         return (T)this;
     }
-    
+
     public T GetNode<T>(string path) where T : Node
     {
         if (string.IsNullOrEmpty(path))
         {
-            throw new ArgumentException("Pathetic cannot be null or empty.", nameof(path));
+            throw new ArgumentException("Path cannot be null or empty.", nameof(path));
         }
 
-        Node? currentNode;
+        Node? resultNode = FindNodeInternal(path);
 
-        if (path.StartsWith("/root"))
+        if (resultNode is T typedResult)
         {
-            path = path["/root".Length..];
-            currentNode = SceneTree.Instance.RootNode;
+            return typedResult;
+        }
 
-            if (path.StartsWith('/'))
-            {
-                path = path.Substring(1);
-            }
-
-            if (!string.IsNullOrEmpty(path))
-            {
-                string[] nodeNames = path.Split('/');
-                foreach (var name in nodeNames)
-                {
-                    if (name == "..")
-                    {
-                        // Traverse back to parent
-                        currentNode = currentNode?.Parent;
-                    }
-                    else
-                    {
-                        currentNode = currentNode?.GetChild(name);
-                    }
-
-                    if (currentNode == null)
-                    {
-                        throw new InvalidOperationException($"Node '{name}' not found in the scene tree.");
-                    }
-                }
-            }
+        if (resultNode is null)
+        {
+            throw new InvalidOperationException($"Node not found at path: '{path}' starting from '{Name}'.");
         }
         else
         {
-            currentNode = this;
-            string[] nodeNames = path.Split('/');
-            foreach (var name in nodeNames)
-            {
-                if (name == "..")
-                {
-                    // Traverse back to parent
-                    currentNode = currentNode?.Parent;
-                }
-                else if (name != "")
-                {
-                    currentNode = currentNode?.GetChild(name);
-                }
-
-                if (currentNode == null)
-                {
-                    throw new InvalidOperationException($"Node '{name}' not found in the scene tree.");
-                }
-            }
+            throw new InvalidOperationException($"Node at path '{path}' is of type '{resultNode.GetType().Name}' but expected '{typeof(T).Name}'.");
         }
-
-        return currentNode as T ?? throw new InvalidOperationException("Node is not of the expected type.");
     }
-    
+
     public T? GetNodeOrNull<T>(string path) where T : Node
     {
         if (string.IsNullOrEmpty(path))
@@ -230,88 +222,93 @@ public class Node
             return null;
         }
 
+        Node? resultNode = FindNodeInternal(path);
+        return resultNode as T;
+    }
+
+
+    private Node? FindNodeInternal(string path)
+    {
         Node? currentNode;
+        string remainingPath = path;
 
-        if (path.StartsWith("/root"))
+        if (remainingPath.StartsWith("/root"))
         {
-            path = path.Substring("/root".Length);
+            remainingPath = remainingPath.Length > 5 ? remainingPath[5..] : ""; // Handle "/root" and "/root/"
             currentNode = SceneTree.Instance.RootNode;
-
-            if (path.StartsWith("/"))
+            if (remainingPath.StartsWith('/'))
             {
-                path = path.Substring(1);
-            }
-
-            if (!string.IsNullOrEmpty(path))
-            {
-                string[] nodeNames = path.Split('/');
-                foreach (var name in nodeNames)
-                {
-                    if (name == "..")
-                    {
-                        // Traverse back to parent
-                        currentNode = currentNode?.Parent;
-                    }
-                    else
-                    {
-                        currentNode = currentNode?.GetChild(name);
-                    }
-
-                    if (currentNode == null)
-                    {
-                        return null;
-                    }
-                }
+                remainingPath = remainingPath[1..];
             }
         }
         else
         {
-            currentNode = this;
-            string[] nodeNames = path.Split('/');
-            foreach (var name in nodeNames)
-            {
-                if (name == "..")
-                {
-                    // Traverse back to parent
-                    currentNode = currentNode?.Parent;
-                }
-                else if (name != "")
-                {
-                    currentNode = currentNode?.GetChildOrNull(name);
-                }
-
-                if (currentNode == null)
-                {
-                    return null;
-                }
-            }
+            currentNode = this; // Start from current node for relative paths
         }
 
-        return currentNode as T;
+        if (string.IsNullOrEmpty(remainingPath))
+        {
+            return currentNode; // Path was just "/root" or empty relative path
+        }
+
+        string[] nodeNames = remainingPath.Split('/');
+        foreach (var name in nodeNames)
+        {
+            if (string.IsNullOrEmpty(name)) continue; // Skip empty segments (e.g., "NodeA//NodeB")
+
+            if (name == "..")
+            {
+                currentNode = currentNode?.Parent;
+            }
+            else
+            {
+                currentNode = currentNode?.GetChildOrNull(name);
+            }
+
+            if (currentNode == null)
+            {
+                return null; // Node not found at this step
+            }
+        }
+        return currentNode;
     }
 
-    // Get child
+
+    public WindowNode? GetOwningWindowNode()
+    {
+        Node? current = this.Parent;
+        while (current != null)
+        {
+            if (current is WindowNode windowNode)
+            {
+                return windowNode;
+            }
+            current = current.Parent;
+        }
+        return null; // No WindowNode ancestor, implies it's in the main window
+    }
+
 
     public T? GetChild<T>(string name) where T : Node
     {
         foreach (Node child in Children)
         {
-            if (child.Name == name)
+            if (child.Name == name && child is T typedChild)
             {
-                return (T)child;
+                return typedChild;
             }
         }
 
         return null;
     }
-    
+
     public T? GetChild<T>() where T : Node
     {
         foreach (Node child in Children)
         {
-            if (child.GetType() == typeof(T))
+            if (child is T typedChild)
             {
-                return (T)child;
+                return typedChild;
             }
         }
 
@@ -320,17 +317,13 @@ public class Node
 
     public Node GetChild(string name)
     {
-        foreach (Node child in Children)
+        Node? child = GetChildOrNull(name);
+        if (child is null)
         {
-            if (child.Name == name)
-            {
-                return child;
-            }
+            SceneTree.Instance.RootNode?.PrintChildren();
+            throw new InvalidOperationException($"Child node with name '{name}' not found in parent '{Name}'.");
         }
-
-        SceneTree.Instance.RootNode?.PrintChildren();
-
-        throw new InvalidOperationException($"Child node with name '{name}' not found.");
+        return child;
     }
 
     public Node? GetChildOrNull(string name)
@@ -346,29 +339,32 @@ public class Node
         return null;
     }
 
-    // Add child
 
     public Node AddChild(Node node)
     {
-        node.Parent = this;
-
-        node.Make();
-
-        Children.Add(node);
-        ChildAdded?.Invoke(this, node);
-
-        return node;
+        return AddChildInternal(node, node.Name);
     }
 
     public Node AddChild(Node node, string name)
     {
-        node.Parent = this;
-        node.Name = name;
+        node.Name = name; // Ensure name is set before Make()
+        return AddChildInternal(node, name); // Pass name for potential use in AddChildInternal
+    }
 
-        node.Make();
+    private Node AddChildInternal(Node node, string nodeName)
+    {
+        if (node.Parent != null)
+        {
+            node.Parent.Children.Remove(node); // Reparent if necessary
+        }
+
+        node.Parent = this;
+        node.Make(); // Call Make after parent is set
 
         Children.Add(node);
         ChildAdded?.Invoke(this, node);
+
+        // Consider calling Start() or Ready() here or deferring via SceneTree if needed
 
         return node;
     }

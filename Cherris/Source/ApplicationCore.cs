@@ -13,9 +13,11 @@ public sealed class ApplicationCore
     private MainAppWindow? mainWindow;
     private Configuration? applicationConfig;
     private readonly List<SecondaryWindow> secondaryWindows = new();
+    private readonly Stack<SecondaryWindow> modalStack = new();
 
     private const string ConfigFilePath = "Res/Cherris/Config.yaml";
     private const string LogFilePath = "Res/Cherris/Log.txt";
+    private static readonly bool _verboseModalInputLog = false;
 
     public static ApplicationCore Instance => lazyInstance.Value;
 
@@ -91,7 +93,6 @@ public sealed class ApplicationCore
             return false;
         }
 
-
         return true;
     }
 
@@ -103,20 +104,18 @@ public sealed class ApplicationCore
             ProcessSystemMessages();
 
 
-            ClickServer.Instance.Process(); // Still uses global Input
+            ClickServer.Instance.Process();
             SceneTree.Instance.Process();
-
 
 
             mainWindow.RenderFrame();
             RenderSecondaryWindows();
 
 
-            Input.Update(); // Clears previous frame's input state for global Input
+            Input.Update();
 
         }
     }
-
 
     private void ProcessSystemMessages()
     {
@@ -125,12 +124,60 @@ public sealed class ApplicationCore
             if (msg.message == NativeMethods.WM_QUIT)
             {
                 Log.Info("WM_QUIT received, signaling application close.");
-                mainWindow?.Close(); // Signal main window to close if not already
-                break; // Exit message loop processing for this frame
+                mainWindow?.Close();
+                break;
             }
 
+            if (modalStack.Count > 0)
+            {
+                var topModal = modalStack.Peek();
+                if (topModal != null && topModal.Handle != IntPtr.Zero)
+                {
+                    bool isMessageForTopModalOrChild = (msg.hwnd == topModal.Handle) || NativeMethods.IsChild(topModal.Handle, msg.hwnd);
+                    bool isMessageForAnyAncestorModal = false;
+
+                    if (!isMessageForTopModalOrChild)
+                    {
+                        IntPtr ancestor = NativeMethods.GetAncestor(msg.hwnd, NativeMethods.GA_ROOT);
+                        foreach (var modal in modalStack)
+                        {
+                            if (ancestor == modal.Handle)
+                            {
+                                isMessageForAnyAncestorModal = true;
+                                break;
+                            }
+                        }
+                    }
+
+
+                    if (!isMessageForTopModalOrChild && !isMessageForAnyAncestorModal)
+                    {
+
+                        if (_verboseModalInputLog)
+                        {
+                            bool isTopModalChild = NativeMethods.IsChild(topModal.Handle, msg.hwnd);
+                            IntPtr ancestor = NativeMethods.GetAncestor(msg.hwnd, NativeMethods.GA_ROOT);
+                            Log.Info($"Modal Filter: msg=0x{msg.message:X} for hwnd={msg.hwnd}. TopModal='{topModal.Title}' ({topModal.Handle}). IsTopModal={msg.hwnd == topModal.Handle}, IsTopChild={isTopModalChild}, IsAncestorModal={isMessageForAnyAncestorModal} (Ancestor={ancestor}). Discarding.");
+                        }
+
+                        if (msg.message >= NativeMethods.WM_MOUSEFIRST && msg.message <= NativeMethods.WM_MOUSELAST ||
+                            msg.message >= NativeMethods.WM_KEYFIRST && msg.message <= NativeMethods.WM_KEYLAST)
+                        {
+
+                            continue;
+                        }
+                    }
+                    else if (_verboseModalInputLog)
+                    {
+                        bool isTopModalChild = NativeMethods.IsChild(topModal.Handle, msg.hwnd);
+                        Log.Info($"Modal Filter: msg=0x{msg.message:X} for hwnd={msg.hwnd}. TopModal='{topModal.Title}' ({topModal.Handle}). IsTopModal={msg.hwnd == topModal.Handle}, IsTopChild={isTopModalChild}, IsAncestorModal={isMessageForAnyAncestorModal}. Processing.");
+                    }
+                }
+            }
+
+
             NativeMethods.TranslateMessage(ref msg);
-            NativeMethods.DispatchMessage(ref msg); // Sends to the correct WindowProcedure
+            NativeMethods.DispatchMessage(ref msg);
         }
     }
 
@@ -144,11 +191,6 @@ public sealed class ApplicationCore
             if (window.IsOpen)
             {
                 window.RenderFrame();
-            }
-            else
-            {
-
-                secondaryWindows.Remove(window);
             }
         }
     }
@@ -166,6 +208,7 @@ public sealed class ApplicationCore
         CloseAllSecondaryWindows();
         mainWindow?.Dispose();
         mainWindow = null;
+        modalStack.Clear();
         Log.Info("ApplicationCore Cleanup finished.");
     }
 
@@ -174,10 +217,11 @@ public sealed class ApplicationCore
         var windowsToClose = new List<SecondaryWindow>(secondaryWindows);
         foreach (var window in windowsToClose)
         {
-            window.Close(); // Request close
-            // Dispose happens when WM_NCDESTROY is processed
+            if (window.IsOpen)
+            {
+                window.Close();
+            }
         }
-        // Don't Clear() here, let them remove themselves on NCDESTROY
     }
 
     internal void RegisterSecondaryWindow(SecondaryWindow window)
@@ -196,8 +240,80 @@ public sealed class ApplicationCore
         if (secondaryWindows.Remove(window))
         {
             Log.Info($"Unregistered secondary window: {window.Title}");
+
+            if (modalStack.Contains(window))
+            {
+
+                Log.Warning($"Window '{window.Title}' was potentially in modal stack during unregistration. Ensure UnregisterModal was called.");
+            }
         }
     }
+
+    internal void RegisterModal(SecondaryWindow window)
+    {
+        if (!modalStack.Contains(window))
+        {
+            Log.Info($"Pushing modal window '{window.Title}' ({window.Handle}) to stack.");
+            modalStack.Push(window);
+
+            NativeMethods.BringWindowToTop(window.Handle);
+            NativeMethods.SetActiveWindow(window.Handle);
+        }
+    }
+
+    internal void UnregisterModal(SecondaryWindow window)
+    {
+        if (modalStack.Count > 0 && modalStack.Peek() == window)
+        {
+            Log.Info($"Popping modal window '{window.Title}' ({window.Handle}) from stack.");
+            modalStack.Pop();
+
+            ActivateTopWindow();
+        }
+        else if (modalStack.Contains(window))
+        {
+            Log.Error($"Attempted to unregister modal window '{window.Title}' which is not on top of the stack!");
+
+            var tempList = new List<SecondaryWindow>(modalStack);
+            tempList.Remove(window);
+            modalStack.Clear();
+            for (int i = tempList.Count - 1; i >= 0; i--) modalStack.Push(tempList[i]);
+            ActivateTopWindow();
+        }
+    }
+
+    private void ActivateTopWindow()
+    {
+        IntPtr hwndToActivate = IntPtr.Zero;
+        string windowTitle = "None";
+
+        if (modalStack.Count > 0)
+        {
+            hwndToActivate = modalStack.Peek().Handle;
+            windowTitle = modalStack.Peek().Title;
+            Log.Info($"Activating next modal window: {windowTitle} ({hwndToActivate})");
+        }
+        else if (mainWindow != null && mainWindow.Handle != IntPtr.Zero)
+        {
+            hwndToActivate = mainWindow.Handle;
+            windowTitle = mainWindow.Title;
+            Log.Info($"Activating main window: {windowTitle} ({hwndToActivate})");
+        }
+
+
+        if (hwndToActivate != IntPtr.Zero && NativeMethods.IsWindow(hwndToActivate))
+        {
+
+            NativeMethods.BringWindowToTop(hwndToActivate);
+            NativeMethods.SetActiveWindow(hwndToActivate);
+            Log.Info($"Called SetActiveWindow/BringWindowToTop for '{windowTitle}' ({hwndToActivate}).");
+        }
+        else
+        {
+            Log.Warning($"Could not activate top window. Target HWND {hwndToActivate} is invalid or zero.");
+        }
+    }
+
 
     private void SetRootNodeFromConfig(string scenePath)
     {
