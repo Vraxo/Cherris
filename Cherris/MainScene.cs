@@ -10,6 +10,15 @@ public class MainScene : Node
 
         //button = GetNode<Button>("Button");
         button!.LeftClicked += OnButtonClicked;
+
+        Console.WriteLine(button is null);
+    }
+
+    public override void Process()
+    {
+        base.Process();
+
+        Console.WriteLine("shiet");
     }
 
     private void OnButtonClicked(Button obj)

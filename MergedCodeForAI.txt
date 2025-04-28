@@ -425,7 +425,21 @@ public class Button : Control
 
     private void HandleKeyboardInput()
     {
-        if (!Focused || !Input.IsKeyPressed(KeyCode.Enter))
+
+
+        bool enterPressed;
+        var owningWindowNode = GetOwningWindowNode();
+
+        if (owningWindowNode != null)
+        {
+            enterPressed = owningWindowNode.IsLocalKeyPressed(KeyCode.Enter);
+        }
+        else
+        {
+            enterPressed = Input.IsKeyPressed(KeyCode.Enter);
+        }
+
+        if (!Focused || !enterPressed)
         {
             return;
         }
@@ -476,8 +490,21 @@ public class Button : Control
     {
         bool invoked = false;
         bool mouseOver = IsMouseOver();
-        bool buttonPressedThisFrame = Input.IsMouseButtonPressed(button);
-        bool buttonReleasedThisFrame = Input.IsMouseButtonReleased(button);
+        bool buttonPressedThisFrame;
+        bool buttonReleasedThisFrame;
+
+        var owningWindowNode = GetOwningWindowNode();
+
+        if (owningWindowNode != null)
+        {
+            buttonPressedThisFrame = owningWindowNode.IsLocalMouseButtonPressed(button);
+            buttonReleasedThisFrame = owningWindowNode.IsLocalMouseButtonReleased(button);
+        }
+        else
+        {
+            buttonPressedThisFrame = Input.IsMouseButtonPressed(button);
+            buttonReleasedThisFrame = Input.IsMouseButtonReleased(button);
+        }
 
 
         if (mouseOver && buttonPressedThisFrame && !Disabled)
@@ -505,7 +532,23 @@ public class Button : Control
                     invoked = true;
                 }
 
-                pressedState = false;
+
+                if (!StayPressed)
+                {
+                    pressedState = false;
+                }
+                else if (!mouseOver && mode == ActionMode.Release)
+                {
+
+                    pressedState = false;
+                }
+                else if (mode == ActionMode.Press && !mouseOver)
+                {
+
+
+                    pressedState = false;
+                }
+
             }
         }
 
@@ -553,8 +596,21 @@ public class Button : Control
             return;
         }
 
-        bool isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Left);
-        bool isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Right);
+        bool isLeftDown;
+        bool isRightDown;
+        var owningWindowNode = GetOwningWindowNode();
+
+        if (owningWindowNode != null)
+        {
+            isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && owningWindowNode.IsLocalMouseButtonDown(MouseButtonCode.Left);
+            isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && owningWindowNode.IsLocalMouseButtonDown(MouseButtonCode.Right);
+        }
+        else
+        {
+            isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Left);
+            isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Right);
+        }
+
         bool isPhysicallyHeldDown = isMouseOver && (isLeftDown || isRightDown);
 
 
@@ -592,6 +648,7 @@ public class Button : Control
         if (!Visible) return;
 
         DrawBackground(context);
+
 
         DrawText(context);
     }
@@ -842,19 +899,43 @@ public abstract class Clickable : Node2D
 </file>
 
 <file path="ClickableRectangle.cs">
+using System.Numerics; // Required for Vector2
+
 namespace Cherris;
 
 public abstract class ClickableRectangle : Clickable
 {
     public override bool IsMouseOver()
     {
-        Vector2 mousePosition = Input.WorldMousePosition;
+        var owningWindowNode = GetOwningWindowNode();
+        Vector2 mousePosition;
+
+        if (owningWindowNode != null)
+        {
+            mousePosition = owningWindowNode.LocalMousePosition;
+        }
+        else
+        {
+
+            mousePosition = Input.MousePosition;
+        }
+
+
+        var globalPos = GlobalPosition;
+        var origin = Origin;
+        var size = ScaledSize;
+
+
+        float left = globalPos.X - origin.X;
+        float top = globalPos.Y - origin.Y;
+        float right = left + size.X;
+        float bottom = top + size.Y;
 
         bool isMouseOver =
-            mousePosition.X > GlobalPosition.X - Origin.X &&
-            mousePosition.X < GlobalPosition.X + ScaledSize.X - Origin.X &&
-            mousePosition.Y > GlobalPosition.Y - Origin.Y &&
-            mousePosition.Y < GlobalPosition.Y + ScaledSize.Y - Origin.Y;
+            mousePosition.X >= left &&
+            mousePosition.X < right &&
+            mousePosition.Y >= top &&
+            mousePosition.Y < bottom;
 
         return isMouseOver;
     }
@@ -2445,7 +2526,11 @@ public class ModalSecondaryWindow : SecondaryWindow
     public override bool TryCreateWindow(IntPtr ownerHwndOverride = default, uint? styleOverride = null)
     {
 
-        uint defaultModalStyle = NativeMethods.WS_POPUP | NativeMethods.WS_CAPTION | NativeMethods.WS_SYSMENU | NativeMethods.WS_VISIBLE;
+        uint defaultModalStyle = NativeMethods.WS_POPUP
+                               | NativeMethods.WS_CAPTION
+                               | NativeMethods.WS_SYSMENU
+                               | NativeMethods.WS_VISIBLE
+                               | NativeMethods.WS_THICKFRAME;
 
 
         return base.TryCreateWindow(ownerHwnd, styleOverride ?? defaultModalStyle);
@@ -2489,7 +2574,8 @@ public class ModalSecondaryWindow : SecondaryWindow
 
 <file path="ModalWindowNode.cs">
 using System;
-using System.Numerics;
+using System.Numerics; // Added for Vector2
+using System.Reflection; // Keep for now if needed, but should remove
 
 namespace Cherris;
 
@@ -2500,7 +2586,7 @@ public class ModalWindowNode : WindowNode
 
     public override void Make()
     {
-        base.Make();
+
         InitializeModalWindow();
     }
 
@@ -2522,12 +2608,19 @@ public class ModalWindowNode : WindowNode
 
         try
         {
+
             modalWindow = new ModalSecondaryWindow(Title, Width, Height, this, ownerHandle);
+
+
+            // Assign to the protected base field
+            this.secondaryWindow = modalWindow;
+
 
             if (!modalWindow.TryCreateWindow())
             {
                 Log.Error($"ModalWindowNode '{Name}' failed to create its modal window.");
                 modalWindow = null;
+                this.secondaryWindow = null; // Clear base reference on failure
                 return;
             }
 
@@ -2536,6 +2629,7 @@ public class ModalWindowNode : WindowNode
                 Log.Error($"ModalWindowNode '{Name}' failed to initialize modal window graphics.");
                 modalWindow.Dispose();
                 modalWindow = null;
+                this.secondaryWindow = null; // Clear base reference on failure
                 return;
             }
 
@@ -2547,19 +2641,51 @@ public class ModalWindowNode : WindowNode
             Log.Error($"Error during ModalWindowNode '{Name}' initialization: {ex.Message}");
             modalWindow?.Dispose();
             modalWindow = null;
+            this.secondaryWindow = null; // Clear base reference on failure
         }
     }
 
-    public override void Free()
+
+    // No need for AssignWindowReference helper anymore
+
+
+    // Override FreeInternal to handle modalWindow and call base
+    protected override void FreeInternal()
     {
         Log.Info($"Freeing ModalWindowNode '{Name}' and its associated modal window.");
+        // Close the specific modal window reference first
         modalWindow?.Close();
-        modalWindow?.Dispose();
         modalWindow = null;
-        base.Free();
+
+        // Also null out the base reference it was using
+        this.secondaryWindow = null;
+
+        // Now call the base implementation which handles Node.Free()
+        base.FreeInternal();
     }
 
 
+    // Process needs to check the protected base flag
+    public override void Process()
+    {
+
+        // Access the protected flag directly
+        if (this.isQueuedForFree)
+        {
+            this.FreeInternal(); // Call our override
+        }
+        else
+        {
+            // Input update uses the base reference (secondaryWindow),
+            // which we set to modalWindow in InitializeModalWindow.
+            this.secondaryWindow?.UpdateLocalInput();
+
+            // Call Node/Node2D Process logic
+            base.Process();
+        }
+    }
+
+    // QueueFree and Free can just use the base implementations now
 }
 </file>
 
@@ -2835,6 +2961,13 @@ internal static class NativeMethods
 
 <file path="Node.cs">
 using Spectre.Console;
+using System.Collections.Generic; // Added for Stack<T>
+using System; // Added for ArgumentException, InvalidOperationException, TypeLoadException
+using System.Linq; // Added for Linq methods
+using System.Reflection; // Added for reflection
+using YamlDotNet.Serialization; // Added for Yaml
+using YamlDotNet.Serialization.NamingConventions; // Added for Yaml Naming Conventions
+using System.IO; // Added for File IO
 
 namespace Cherris;
 
@@ -2857,21 +2990,23 @@ public class Node
     public List<Node> Children { get; set; } = [];
     public ProcessMode ProcessingMode = ProcessMode.Inherit;
 
+    private bool fieldActive = true;
+
     public bool Active
     {
-        get;
+        get => fieldActive;
 
         set
         {
-            if (field == value)
+            if (fieldActive == value)
             {
                 return;
             }
 
-            field = value;
-            ActiveChanged?.Invoke(this, Active);
+            fieldActive = value;
+            ActiveChanged?.Invoke(this, fieldActive);
         }
-    } = true;
+    }
 
     public string AbsolutePath
     {
@@ -2879,34 +3014,32 @@ public class Node
         {
             if (Parent is null)
             {
-                // This is the root node
+
                 return "/root/";
             }
 
             Stack<string> pathStack = new();
             Node? current = this;
 
-            // Traverse the hierarchy upwards, collecting names
+
             while (current is not null && current.Parent is not null)
             {
-                // Skip the root node's name (Parent will be null for root)
+
                 pathStack.Push(current.Name);
                 current = current.Parent;
             }
 
-            // Build the absolute Pathetic
+
             return $"/root/{string.Join("/", pathStack)}";
         }
     }
 
-    // Events
 
     public delegate void ActiveEvent(Node sender, bool active);
     public delegate void ChildEvent(Node sender, Node child);
     public event ActiveEvent? ActiveChanged;
     public event ChildEvent? ChildAdded;
 
-    // Main
 
     public virtual void Make() { }
 
@@ -2926,7 +3059,6 @@ public class Node
         Parent?.Children.Remove(this);
     }
 
-    // Process
 
     public virtual void ProcessBegin() { }
 
@@ -2934,7 +3066,6 @@ public class Node
 
     public virtual void ProcessEnd() { }
 
-    // Print children
 
     public void PrintChildren()
     {
@@ -2958,7 +3089,6 @@ public class Node
         }
     }
 
-    // Activation
 
     public virtual void Activate()
     {
@@ -2980,7 +3110,6 @@ public class Node
         }
     }
 
-    // Get node
 
     public T GetParent<T>() where T : Node
     {
@@ -2991,12 +3120,12 @@ public class Node
 
         return (T)this;
     }
-    
+
     public T GetNode<T>(string path) where T : Node
     {
         if (string.IsNullOrEmpty(path))
         {
-            throw new ArgumentException("Pathetic cannot be null or empty.", nameof(path));
+            throw new ArgumentException("Path cannot be null or empty.", nameof(path));
         }
 
         Node? currentNode;
@@ -3018,7 +3147,7 @@ public class Node
                 {
                     if (name == "..")
                     {
-                        // Traverse back to parent
+
                         currentNode = currentNode?.Parent;
                     }
                     else
@@ -3041,7 +3170,7 @@ public class Node
             {
                 if (name == "..")
                 {
-                    // Traverse back to parent
+
                     currentNode = currentNode?.Parent;
                 }
                 else if (name != "")
@@ -3058,7 +3187,7 @@ public class Node
 
         return currentNode as T ?? throw new InvalidOperationException("Node is not of the expected type.");
     }
-    
+
     public T? GetNodeOrNull<T>(string path) where T : Node
     {
         if (string.IsNullOrEmpty(path))
@@ -3085,12 +3214,12 @@ public class Node
                 {
                     if (name == "..")
                     {
-                        // Traverse back to parent
+
                         currentNode = currentNode?.Parent;
                     }
                     else
                     {
-                        currentNode = currentNode?.GetChild(name);
+                        currentNode = currentNode?.GetChildOrNull(name);
                     }
 
                     if (currentNode == null)
@@ -3108,7 +3237,7 @@ public class Node
             {
                 if (name == "..")
                 {
-                    // Traverse back to parent
+
                     currentNode = currentNode?.Parent;
                 }
                 else if (name != "")
@@ -3126,7 +3255,6 @@ public class Node
         return currentNode as T;
     }
 
-    // Get child
 
     public T? GetChild<T>(string name) where T : Node
     {
@@ -3140,7 +3268,7 @@ public class Node
 
         return null;
     }
-    
+
     public T? GetChild<T>() where T : Node
     {
         foreach (Node child in Children)
@@ -3182,7 +3310,6 @@ public class Node
         return null;
     }
 
-    // Add child
 
     public Node AddChild(Node node)
     {
@@ -3207,6 +3334,20 @@ public class Node
         ChildAdded?.Invoke(this, node);
 
         return node;
+    }
+
+    public WindowNode? GetOwningWindowNode()
+    {
+        Node? current = this;
+        while (current != null)
+        {
+            if (current is WindowNode windowNode)
+            {
+                return windowNode;
+            }
+            current = current.Parent;
+        }
+        return null;
     }
 }
 </file>
@@ -4245,9 +4386,9 @@ public class SceneTreeTimer(float waitTime)
 </file>
 
 <file path="SecondaryWindow.cs">
-using System;
-using System.Collections.Generic;
-using System.Numerics;
+using System; // Required for Action, ArgumentNullException etc.
+using System.Collections.Generic; // Required for HashSet, Dictionary etc.
+using System.Numerics; // Required for Vector2
 
 namespace Cherris;
 
@@ -4257,9 +4398,9 @@ public class SecondaryWindow : Direct2DAppWindow
     private readonly HashSet<KeyCode> currentKeysDown = [];
     private readonly HashSet<MouseButtonCode> currentMouseButtonsDown = [];
     private Vector2 currentMousePosition = Vector2.Zero;
-    private float currentMouseWheelDelta = 0f; // Added for local wheel state
-    private readonly HashSet<KeyCode> previousKeysDown = []; // Added for local pressed/released
-    private readonly HashSet<MouseButtonCode> previousMouseButtonsDown = []; // Added for local pressed/released
+    private float currentMouseWheelDelta = 0f;
+    private readonly HashSet<KeyCode> previousKeysDown = [];
+    private readonly HashSet<MouseButtonCode> previousMouseButtonsDown = [];
 
     public SecondaryWindow(string title, int width, int height, WindowNode owner)
         : base(title, width, height)
@@ -4279,7 +4420,7 @@ public class SecondaryWindow : Direct2DAppWindow
         Log.Info($"SecondaryWindow '{Title}' OnClose called.");
 
 
-        ownerNode?.QueueFree(); // Request the node be freed
+        ownerNode?.QueueFree();
 
 
         return base.OnClose();
@@ -5280,16 +5421,19 @@ public enum MouseButton { Left, Right, Middle, XButton1, XButton2 }
 <file path="WindowNode.cs">
 using System;
 using System.Numerics;
+using System.Collections.Generic; // Added for List
 
 namespace Cherris;
 
-public class WindowNode : Node
+public class WindowNode : Node2D
 {
-    private SecondaryWindow? secondaryWindow;
+    // Make secondaryWindow protected so ModalWindowNode can assign to it
+    protected SecondaryWindow? secondaryWindow;
     private string windowTitle = "Cherris Window";
     private int windowWidth = 640;
     private int windowHeight = 480;
-    private bool isQueuedForFree = false;
+    // Make isQueuedForFree protected so ModalWindowNode can check it if needed
+    protected bool isQueuedForFree = false;
 
     public string Title
     {
@@ -5298,7 +5442,7 @@ public class WindowNode : Node
         {
             if (windowTitle == value) return;
             windowTitle = value;
-            // TODO: Add method to update existing window title if needed
+
         }
     }
 
@@ -5309,7 +5453,7 @@ public class WindowNode : Node
         {
             if (windowWidth == value) return;
             windowWidth = value;
-            // TODO: Add method to resize existing window if needed
+
         }
     }
 
@@ -5320,9 +5464,10 @@ public class WindowNode : Node
         {
             if (windowHeight == value) return;
             windowHeight = value;
-            // TODO: Add method to resize existing window if needed
+
         }
     }
+
 
     public override void Make()
     {
@@ -5333,7 +5478,7 @@ public class WindowNode : Node
     public override void Process()
     {
         base.Process();
-        secondaryWindow?.UpdateLocalInput(); // Update previous frame state
+        secondaryWindow?.UpdateLocalInput();
 
         if (isQueuedForFree)
         {
@@ -5341,6 +5486,9 @@ public class WindowNode : Node
         }
     }
 
+    // Make InitializeWindow virtual if ModalWindowNode needs to override
+    // or change its behavior significantly, otherwise protected might be fine.
+    // For now, ModalWindowNode bypasses it in Make(), so it doesn't strictly matter.
     private void InitializeWindow()
     {
         if (secondaryWindow is not null)
@@ -5351,7 +5499,8 @@ public class WindowNode : Node
 
         try
         {
-            secondaryWindow = new SecondaryWindow(Title, Width, Height, this);
+
+            secondaryWindow = new SecondaryWindow(Title, this.Width, this.Height, this);
 
             if (!secondaryWindow.TryCreateWindow())
             {
@@ -5363,7 +5512,7 @@ public class WindowNode : Node
             if (!secondaryWindow.InitializeWindowAndGraphics())
             {
                 Log.Error($"WindowNode '{Name}' failed to initialize window graphics.");
-                secondaryWindow.Dispose(); // Clean up partially created window
+                secondaryWindow.Dispose();
                 secondaryWindow = null;
                 return;
             }
@@ -5386,20 +5535,21 @@ public class WindowNode : Node
     }
 
 
-    private void FreeInternal()
+    // Change access modifier to protected
+    protected virtual void FreeInternal()
     {
         Log.Info($"Freeing WindowNode '{Name}' and its associated window.");
-        secondaryWindow?.Close(); // Request OS window close
-                                  // Actual disposal happens via WM_NCDESTROY -> Unregister -> Win32Window.Dispose
-        secondaryWindow = null; // Remove reference
-        base.Free(); // Free the node itself from the tree
+        secondaryWindow?.Close();
+
+        secondaryWindow = null;
+        base.Free(); // Call Node.Free() to remove from parent etc.
     }
 
 
     public override void Free()
     {
-        // This override prevents direct freeing. Use QueueFree() instead.
-        // The actual cleanup happens in FreeInternal() when processed.
+
+
         if (!isQueuedForFree)
         {
             Log.Warning($"Direct call to Free() on WindowNode '{Name}' detected. Use QueueFree() instead.");
@@ -5427,11 +5577,12 @@ public class WindowNode : Node
 
         if (node is VisualItem { Visible: true } visualItem)
         {
+
             visualItem.Draw(context);
         }
 
 
-        var childrenToRender = new List<Node>(node.Children); // Copy list for safe iteration
+        var childrenToRender = new List<Node>(node.Children);
         foreach (Node child in childrenToRender)
         {
             RenderNodeRecursive(child, context);
@@ -5441,7 +5592,7 @@ public class WindowNode : Node
 
     public SecondaryWindow? GetWindowHandle() => secondaryWindow;
 
-    // Convenience methods to access local input state
+
     public bool IsLocalKeyDown(KeyCode key) => secondaryWindow?.IsKeyDown(key) ?? false;
     public bool IsLocalMouseButtonDown(MouseButtonCode button) => secondaryWindow?.IsMouseButtonDown(button) ?? false;
     public Vector2 LocalMousePosition => secondaryWindow?.GetMousePosition() ?? Vector2.Zero;
