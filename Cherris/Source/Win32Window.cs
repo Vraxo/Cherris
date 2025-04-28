@@ -35,9 +35,7 @@ public abstract class Win32Window : IDisposable
         Height = _initialHeight;
         _windowClassName = className ?? ("Win32Window_" + Guid.NewGuid().ToString("N"));
 
-
         _wndProcDelegate = WindowProcedure;
-
     }
 
     public virtual bool TryCreateWindow(IntPtr ownerHwnd = default, uint? styleOverride = null)
@@ -84,8 +82,7 @@ public abstract class Win32Window : IDisposable
             }
         }
 
-
-        _gcHandle = GCHandle.Alloc(this); // Use a strong handle
+        _gcHandle = GCHandle.Alloc(this);
 
         uint windowStyle = styleOverride ?? NativeMethods.WS_OVERLAPPEDWINDOW;
 
@@ -99,9 +96,7 @@ public abstract class Win32Window : IDisposable
             ownerHwnd,
             IntPtr.Zero,
             _hInstance,
-
             GCHandle.ToIntPtr(_gcHandle));
-
 
         if (_hwnd == IntPtr.Zero)
         {
@@ -136,15 +131,13 @@ public abstract class Win32Window : IDisposable
             return false;
         }
 
-
         return Initialize();
     }
-
 
     private static IntPtr WindowProcedure(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         Win32Window? window = null;
-        IntPtr userDataPtr = NativeMethods.GetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA);
+        IntPtr userDataPtr = IntPtr.Zero;
 
         if (msg == NativeMethods.WM_NCCREATE)
         {
@@ -155,9 +148,9 @@ public abstract class Win32Window : IDisposable
                 window = handle.Target as Win32Window;
                 if (window != null)
                 {
-
-                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, cs.lpCreateParams);
-                    Log.Info($"WM_NCCREATE: Associated GCHandle {cs.lpCreateParams} with HWND {hWnd} ('{window.Title}')");
+                    userDataPtr = cs.lpCreateParams; // Store for logging below
+                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, userDataPtr);
+                    Log.Info($"WM_NCCREATE: Associated GCHandle {userDataPtr} with HWND {hWnd} ('{window.Title}')");
                 }
                 else
                 {
@@ -169,38 +162,48 @@ public abstract class Win32Window : IDisposable
                 Log.Error($"Error during WM_NCCREATE processing for HWND {hWnd}: {ex}");
             }
         }
-        else if (userDataPtr != IntPtr.Zero)
+        else
         {
-            try
+            userDataPtr = NativeMethods.GetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA);
+            if (userDataPtr != IntPtr.Zero)
             {
-                var handle = GCHandle.FromIntPtr(userDataPtr);
-                if (handle.IsAllocated && handle.Target != null)
+                try
                 {
-                    window = handle.Target as Win32Window;
+                    var handle = GCHandle.FromIntPtr(userDataPtr);
+                    if (handle.IsAllocated && handle.Target != null)
+                    {
+                        window = handle.Target as Win32Window;
+                    }
+                    else if (handle.IsAllocated && handle.Target == null)
+                    {
+                        Log.Warning($"WindowProcedure: GCHandle {userDataPtr} for HWND {hWnd} target is null (likely finalized prematurely). Msg={msg:X}. Resetting GWLP_USERDATA.");
+                        NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
+                    }
+                    else
+                    {
+                        Log.Warning($"WindowProcedure: GCHandle {userDataPtr} for HWND {hWnd} is not allocated. Msg={msg:X}. Resetting GWLP_USERDATA.");
+                        NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
+                    }
                 }
-                else if (handle.IsAllocated && handle.Target == null)
+                catch (InvalidOperationException)
                 {
-                    Log.Warning($"WindowProcedure: GCHandle {userDataPtr} for HWND {hWnd} target is null (likely finalized prematurely). Msg={msg:X}. Resetting GWLP_USERDATA.");
+                    Log.Warning($"WindowProcedure: Invalid GCHandle {userDataPtr} retrieved for HWND {hWnd}, Msg={msg:X}. Resetting GWLP_USERDATA.");
                     NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
                 }
-                else
+                catch (Exception ex)
                 {
-                    Log.Warning($"WindowProcedure: GCHandle {userDataPtr} for HWND {hWnd} is not allocated. Msg={msg:X}. Resetting GWLP_USERDATA.");
-                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
+                    Log.Error($"Error retrieving window instance from GCHandle {userDataPtr} for HWND {hWnd}: {ex}");
                 }
-            }
-            catch (InvalidOperationException)
-            {
-                Log.Warning($"WindowProcedure: Invalid GCHandle {userDataPtr} retrieved for HWND {hWnd}, Msg={msg:X}. Resetting GWLP_USERDATA.");
-
-                NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"Error retrieving window instance from GCHandle {userDataPtr} for HWND {hWnd}: {ex}");
             }
         }
 
+        // ---> ADDED LOGGING <---
+        if (window is ModalSecondaryWindow) // Check if the retrieved instance is a modal
+        {
+            // Log every message for the modal window HWND after NCCREATE potentially associated it
+            Log.Info($"MODAL_WNDPROC_DEBUG: HWND={hWnd}, Msg={msg:X}, UserDataPtr={userDataPtr}, FoundInstance={window != null}, Title='{window?.Title ?? "N/A"}'");
+        }
+        // ---> END ADDED LOGGING <---
 
         if (window != null)
         {
@@ -213,11 +216,10 @@ public abstract class Win32Window : IDisposable
                 Log.Error($"Error handling message {msg:X} for HWND {hWnd} ('{window.Title}'): {ex}");
             }
         }
-        else if (msg != NativeMethods.WM_NCCREATE && msg != NativeMethods.WM_NCDESTROY)
+        else if (msg != NativeMethods.WM_NCCREATE && msg != NativeMethods.WM_NCDESTROY && msg != 24 /*WM_GETMINMAXINFO*/) // Suppress warning for expected early messages
         {
             Log.Warning($"WindowProcedure: No associated window instance found for HWND {hWnd} (UserData: {userDataPtr}) for message {msg:X}. Using DefWindowProc.");
         }
-
 
         return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
     }
@@ -227,7 +229,6 @@ public abstract class Win32Window : IDisposable
     {
         int xPos = NativeMethods.GET_X_LPARAM(lParam);
         int yPos = NativeMethods.GET_Y_LPARAM(lParam);
-
 
         switch (msg)
         {
@@ -290,7 +291,6 @@ public abstract class Win32Window : IDisposable
                 int vkCodeDown = (int)wParam;
                 OnKeyDown(vkCodeDown);
 
-
                 if (vkCodeDown == NativeMethods.VK_ESCAPE && !IsKeyDownHandled(vkCodeDown))
                 {
                     Close();
@@ -313,7 +313,6 @@ public abstract class Win32Window : IDisposable
             case NativeMethods.WM_DESTROY:
                 Log.Info($"WM_DESTROY for {hWnd} ('{Title}').");
                 OnDestroy();
-
 
                 if (this is MainAppWindow)
                 {
@@ -353,14 +352,11 @@ public abstract class Win32Window : IDisposable
                         Log.Error($"Error freeing GCHandle {ptr} on NCDESTROY for '{Title}' ({hWnd}): {ex.Message}");
                     }
 
-
                     NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
                 }
 
-
                 if (_gcHandle.IsAllocated && GCHandle.ToIntPtr(_gcHandle) == ptr)
                 {
-
                     _gcHandle = default;
                 }
                 _hwnd = IntPtr.Zero;
@@ -389,7 +385,6 @@ public abstract class Win32Window : IDisposable
         }
     }
 
-
     protected abstract bool Initialize();
     public abstract void RenderFrame();
     protected virtual void OnSize(int width, int height) { }
@@ -403,7 +398,6 @@ public abstract class Win32Window : IDisposable
     protected virtual bool OnClose() { return true; }
     protected virtual void OnDestroy() { }
     protected abstract void Cleanup();
-
 
     public void Dispose()
     {
@@ -426,20 +420,16 @@ public abstract class Win32Window : IDisposable
             {
                 Log.Info($"Requesting destroy for window {_hwnd} ('{Title}') during Dispose...");
 
-
                 NativeMethods.DestroyWindow(_hwnd);
-
             }
             else
             {
-
                 if (_gcHandle.IsAllocated)
                 {
                     Log.Warning($"Freeing potentially dangling GCHandle for '{Title}' during Dispose (window handle was already zero)...");
                     try { _gcHandle.Free(); } catch (Exception ex) { Log.Error($"Error freeing GCHandle: {ex.Message}"); }
                 }
             }
-
 
             _isDisposed = true;
             IsOpen = false;
@@ -453,6 +443,5 @@ public abstract class Win32Window : IDisposable
         Dispose(false);
     }
 }
-
 
 public enum MouseButton { Left, Right, Middle, XButton1, XButton2 }

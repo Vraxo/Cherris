@@ -100,20 +100,15 @@ public sealed class ApplicationCore
     {
         while (mainWindow != null && mainWindow.IsOpen)
         {
-
             ProcessSystemMessages();
-
 
             ClickServer.Instance.Process();
             SceneTree.Instance.Process();
 
-
             mainWindow.RenderFrame();
             RenderSecondaryWindows();
 
-
             Input.Update();
-
         }
     }
 
@@ -128,16 +123,18 @@ public sealed class ApplicationCore
                 break;
             }
 
+            bool processMessage = true;
+
             if (modalStack.Count > 0)
             {
                 var topModal = modalStack.Peek();
                 if (topModal != null && topModal.Handle != IntPtr.Zero)
                 {
-                    bool isMessageForTopModalOrChild = (msg.hwnd == topModal.Handle) || NativeMethods.IsChild(topModal.Handle, msg.hwnd);
-                    bool isMessageForAnyAncestorModal = false;
+                    bool isMessageForTopModalWindow = (msg.hwnd == topModal.Handle);
 
-                    if (!isMessageForTopModalOrChild)
+                    if (!isMessageForTopModalWindow)
                     {
+                        bool isMessageForAnyAncestorModal = false;
                         IntPtr ancestor = NativeMethods.GetAncestor(msg.hwnd, NativeMethods.GA_ROOT);
                         foreach (var modal in modalStack)
                         {
@@ -147,40 +144,37 @@ public sealed class ApplicationCore
                                 break;
                             }
                         }
-                    }
 
-
-                    if (!isMessageForTopModalOrChild && !isMessageForAnyAncestorModal)
-                    {
-
-                        if (_verboseModalInputLog)
+                        if (!isMessageForAnyAncestorModal)
                         {
-                            bool isTopModalChild = NativeMethods.IsChild(topModal.Handle, msg.hwnd);
-                            IntPtr ancestor = NativeMethods.GetAncestor(msg.hwnd, NativeMethods.GA_ROOT);
-                            Log.Info($"Modal Filter: msg=0x{msg.message:X} for hwnd={msg.hwnd}. TopModal='{topModal.Title}' ({topModal.Handle}). IsTopModal={msg.hwnd == topModal.Handle}, IsTopChild={isTopModalChild}, IsAncestorModal={isMessageForAnyAncestorModal} (Ancestor={ancestor}). Discarding.");
-                        }
+                            bool isMouseKey = (msg.message >= NativeMethods.WM_MOUSEFIRST && msg.message <= NativeMethods.WM_MOUSELAST ||
+                                              msg.message >= NativeMethods.WM_KEYFIRST && msg.message <= NativeMethods.WM_KEYLAST);
 
-                        if (msg.message >= NativeMethods.WM_MOUSEFIRST && msg.message <= NativeMethods.WM_MOUSELAST ||
-                            msg.message >= NativeMethods.WM_KEYFIRST && msg.message <= NativeMethods.WM_KEYLAST)
-                        {
-
-                            continue;
+                            if (isMouseKey)
+                            {
+                                if (_verboseModalInputLog)
+                                {
+                                    Log.Info($"Modal Filter: Discarding msg=0x{msg.message:X} for hwnd={msg.hwnd}. TopModal='{topModal.Title}' ({topModal.Handle}). Reason: Not for TopModal or Ancestor.");
+                                }
+                                processMessage = false;
+                            }
                         }
                     }
-                    else if (_verboseModalInputLog)
+
+                    if (processMessage && _verboseModalInputLog)
                     {
-                        bool isTopModalChild = NativeMethods.IsChild(topModal.Handle, msg.hwnd);
-                        Log.Info($"Modal Filter: msg=0x{msg.message:X} for hwnd={msg.hwnd}. TopModal='{topModal.Title}' ({topModal.Handle}). IsTopModal={msg.hwnd == topModal.Handle}, IsTopChild={isTopModalChild}, IsAncestorModal={isMessageForAnyAncestorModal}. Processing.");
+                        Log.Info($"Modal Filter: Processing msg=0x{msg.message:X} for hwnd={msg.hwnd}. TopModal='{topModal.Title}' ({topModal.Handle}). Reason: Is for TopModal or Ancestor.");
                     }
                 }
             }
 
-
-            NativeMethods.TranslateMessage(ref msg);
-            NativeMethods.DispatchMessage(ref msg);
+            if (processMessage)
+            {
+                NativeMethods.TranslateMessage(ref msg);
+                NativeMethods.DispatchMessage(ref msg);
+            }
         }
     }
-
 
     private void RenderSecondaryWindows()
     {
@@ -197,7 +191,6 @@ public sealed class ApplicationCore
 
     private void OnMainWindowClosed()
     {
-
         Log.Info("Main window closed signal received. Closing secondary windows.");
         CloseAllSecondaryWindows();
     }
@@ -215,6 +208,7 @@ public sealed class ApplicationCore
     private void CloseAllSecondaryWindows()
     {
         var windowsToClose = new List<SecondaryWindow>(secondaryWindows);
+
         foreach (var window in windowsToClose)
         {
             if (window.IsOpen)
@@ -226,7 +220,6 @@ public sealed class ApplicationCore
 
     internal void RegisterSecondaryWindow(SecondaryWindow window)
     {
-
         if (!secondaryWindows.Contains(window))
         {
             secondaryWindows.Add(window);
@@ -236,14 +229,12 @@ public sealed class ApplicationCore
 
     internal void UnregisterSecondaryWindow(SecondaryWindow window)
     {
-
         if (secondaryWindows.Remove(window))
         {
             Log.Info($"Unregistered secondary window: {window.Title}");
 
             if (modalStack.Contains(window))
             {
-
                 Log.Warning($"Window '{window.Title}' was potentially in modal stack during unregistration. Ensure UnregisterModal was called.");
             }
         }
@@ -300,10 +291,8 @@ public sealed class ApplicationCore
             Log.Info($"Activating main window: {windowTitle} ({hwndToActivate})");
         }
 
-
         if (hwndToActivate != IntPtr.Zero && NativeMethods.IsWindow(hwndToActivate))
         {
-
             NativeMethods.BringWindowToTop(hwndToActivate);
             NativeMethods.SetActiveWindow(hwndToActivate);
             Log.Info($"Called SetActiveWindow/BringWindowToTop for '{windowTitle}' ({hwndToActivate}).");
@@ -419,7 +408,6 @@ public sealed class ApplicationCore
             Log.Error("Cannot apply configuration because it was not loaded.");
             return;
         }
-
 
         SetRootNodeFromConfig(applicationConfig.MainScenePath);
     }
