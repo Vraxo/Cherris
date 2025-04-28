@@ -11,9 +11,9 @@ internal static class NativeMethods
     public const uint CS_OWNDC = 0x0020;
 
     public const uint WS_OVERLAPPED = 0x00000000;
-    public const uint WS_CAPTION = 0x00C00000;
+    public const uint WS_CAPTION = 0x00C00000;     /* WS_BORDER | WS_DLGFRAME  */
     public const uint WS_SYSMENU = 0x00080000;
-    public const uint WS_THICKFRAME = 0x00040000;
+    public const uint WS_THICKFRAME = 0x00040000; // For resizing
     public const uint WS_MINIMIZEBOX = 0x00020000;
     public const uint WS_MAXIMIZEBOX = 0x00010000;
     public const uint WS_OVERLAPPEDWINDOW = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
@@ -21,8 +21,6 @@ internal static class NativeMethods
     public const uint WS_POPUP = 0x80000000;
     public const uint WS_BORDER = 0x00800000;
     public const uint WS_DLGFRAME = 0x00400000;
-    public const uint WS_CHILD = 0x40000000;
-
 
     public const int WM_NCCREATE = 0x0081;
     public const int WM_CREATE = 0x0001;
@@ -48,14 +46,6 @@ internal static class NativeMethods
     public const int WM_QUIT = 0x0012;
     public const int WM_PARENTNOTIFY = 0x0210;
     public const int WM_ENTERIDLE = 0x0121;
-    public const int WM_ACTIVATE = 0x0006;
-    public const int WM_NCACTIVATE = 0x0086;
-
-
-    public const uint WM_MOUSEFIRST = 0x0200;
-    public const uint WM_MOUSELAST = 0x020E;
-    public const uint WM_KEYFIRST = 0x0100;
-    public const uint WM_KEYLAST = 0x0109;
 
 
     public const int CW_USEDEFAULT = unchecked((int)0x80000000);
@@ -64,7 +54,6 @@ internal static class NativeMethods
     public const int GWLP_USERDATA = -21;
     public const int GCLP_HBRBACKGROUND = -10;
     public const int GWL_STYLE = -16;
-    public const uint GA_ROOT = 2;
 
 
     public const int IDI_APPLICATION = 32512;
@@ -220,25 +209,6 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetParent(IntPtr hWnd);
-
-
-    [DllImport("user32.dll")]
-    public static extern IntPtr SetActiveWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool IsWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool BringWindowToTop(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
 
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]

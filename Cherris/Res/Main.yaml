@@ -4,7 +4,7 @@ children:
   - Node: Button::Button
     Position: [100, 100]
     Text: Hi!  
-  - Node: ModalWindowNode::Window2
+  - Node: WindowNode::Window2
     children:
       - Node: Button::Button2
         Position: [250, 250]
