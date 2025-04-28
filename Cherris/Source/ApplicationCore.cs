@@ -23,6 +23,11 @@ public sealed class ApplicationCore
     {
     }
 
+    public IntPtr GetMainWindowHandle()
+    {
+        return mainWindow?.Handle ?? IntPtr.Zero;
+    }
+
     public void Run()
     {
         if (!Start())
@@ -95,7 +100,7 @@ public sealed class ApplicationCore
         while (mainWindow != null && mainWindow.IsOpen)
         {
 
-            mainWindow.ProcessMessages();
+            ProcessAllWindowsMessages();
 
 
             ClickServer.Instance.Process();
@@ -109,6 +114,21 @@ public sealed class ApplicationCore
 
             Input.Update();
 
+        }
+    }
+
+
+    private void ProcessAllWindowsMessages()
+    {
+        mainWindow?.ProcessMessages();
+
+        var windowsToProcess = new List<SecondaryWindow>(secondaryWindows);
+        foreach (var window in windowsToProcess)
+        {
+            if (window.IsOpen)
+            {
+                window.ProcessMessages();
+            }
         }
     }
 

@@ -10,8 +10,17 @@ internal static class NativeMethods
     public const uint CS_VREDRAW = 0x0001;
     public const uint CS_OWNDC = 0x0020;
 
-    public const uint WS_OVERLAPPEDWINDOW = 0xCF0000;
+    public const uint WS_OVERLAPPED = 0x00000000;
+    public const uint WS_CAPTION = 0x00C00000;     /* WS_BORDER | WS_DLGFRAME  */
+    public const uint WS_SYSMENU = 0x00080000;
+    public const uint WS_THICKFRAME = 0x00040000; // For resizing
+    public const uint WS_MINIMIZEBOX = 0x00020000;
+    public const uint WS_MAXIMIZEBOX = 0x00010000;
+    public const uint WS_OVERLAPPEDWINDOW = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
     public const uint WS_VISIBLE = 0x10000000;
+    public const uint WS_POPUP = 0x80000000;
+    public const uint WS_BORDER = 0x00800000;
+    public const uint WS_DLGFRAME = 0x00400000;
 
     public const int WM_NCCREATE = 0x0081;
     public const int WM_CREATE = 0x0001;
@@ -35,6 +44,8 @@ internal static class NativeMethods
     public const int WM_MOUSEMOVE = 0x0200;
     public const int WM_MOUSEWHEEL = 0x020A;
     public const int WM_QUIT = 0x0012;
+    public const int WM_PARENTNOTIFY = 0x0210;
+    public const int WM_ENTERIDLE = 0x0121;
 
 
     public const int CW_USEDEFAULT = unchecked((int)0x80000000);
@@ -42,6 +53,8 @@ internal static class NativeMethods
     public const int VK_ESCAPE = 0x1B;
     public const int GWLP_USERDATA = -21;
     public const int GCLP_HBRBACKGROUND = -10;
+    public const int GWL_STYLE = -16;
+
 
     public const int IDI_APPLICATION = 32512;
     public const int IDC_ARROW = 32512;
@@ -188,6 +201,15 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr lpIconName);
+
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetParent(IntPtr hWnd);
+
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
