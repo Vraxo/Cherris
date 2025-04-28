@@ -23,6 +23,7 @@ public class SecondaryWindow : Direct2DAppWindow
 
     protected override void DrawUIContent(DrawingContext context)
     {
+
         ownerNode?.RenderChildren(context);
     }
 
@@ -30,7 +31,9 @@ public class SecondaryWindow : Direct2DAppWindow
     {
         Log.Info($"SecondaryWindow '{Title}' OnClose called.");
 
+
         ownerNode?.QueueFree();
+
 
         return base.OnClose();
     }
@@ -42,6 +45,7 @@ public class SecondaryWindow : Direct2DAppWindow
         base.Cleanup();
         Log.Info($"SecondaryWindow '{Title}' Cleanup finished.");
     }
+
 
     public void UpdateLocalInput()
     {
@@ -64,14 +68,6 @@ public class SecondaryWindow : Direct2DAppWindow
         int xPos = NativeMethods.GET_X_LPARAM(lParam);
         int yPos = NativeMethods.GET_Y_LPARAM(lParam);
         Vector2 mousePos = new Vector2(xPos, yPos);
-
-        // ---> ADDED LOGGING <---
-        if (msg >= NativeMethods.WM_MOUSEFIRST && msg <= NativeMethods.WM_MOUSELAST)
-        {
-            // Log all mouse messages reaching the instance's HandleMessage
-            Log.Info($"INPUT_DEBUG: Window '{Title}' ({hWnd}) HandleMessage received mouse msg {msg:X} at {mousePos}");
-        }
-        // ---> END ADDED LOGGING <---
 
         switch (msg)
         {
@@ -135,17 +131,19 @@ public class SecondaryWindow : Direct2DAppWindow
                 break;
         }
 
-        // Let the base Win32Window handle other messages like WM_CLOSE, WM_DESTROY etc.
-        // Crucially, DO NOT call DefWindowProc here if the base class does.
+
         return base.HandleMessage(hWnd, msg, wParam, lParam);
     }
+
 
     public bool IsKeyDown(KeyCode key) => currentKeysDown.Contains(key);
     public bool IsMouseButtonDown(MouseButtonCode button) => currentMouseButtonsDown.Contains(button);
     public Vector2 GetMousePosition() => currentMousePosition;
+
     public bool IsKeyPressed(KeyCode key) => currentKeysDown.Contains(key) && !previousKeysDown.Contains(key);
     public bool IsKeyReleased(KeyCode key) => !currentKeysDown.Contains(key) && previousKeysDown.Contains(key);
     public bool IsMouseButtonPressed(MouseButtonCode button) => currentMouseButtonsDown.Contains(button) && !previousMouseButtonsDown.Contains(button);
     public bool IsMouseButtonReleased(MouseButtonCode button) => !currentMouseButtonsDown.Contains(button) && previousMouseButtonsDown.Contains(button);
     public float GetMouseWheelMovement() => currentMouseWheelDelta;
+
 }

@@ -14,11 +14,10 @@ public sealed class ApplicationCore
     private MainAppWindow? mainWindow;
     private Configuration? applicationConfig;
     private readonly List<SecondaryWindow> secondaryWindows = new();
-    private readonly Stack<SecondaryWindow> modalStack = new();
+    private readonly Stack<SecondaryWindow> modalStack = new(); // Stack for active modals
 
     private const string ConfigFilePath = "Res/Cherris/Config.yaml";
     private const string LogFilePath = "Res/Cherris/Log.txt";
-    private static readonly bool _verboseModalInputLog = false;
 
     public static ApplicationCore Instance => lazyInstance.Value;
 
@@ -94,6 +93,7 @@ public sealed class ApplicationCore
             return false;
         }
 
+
         return true;
     }
 
@@ -102,11 +102,12 @@ public sealed class ApplicationCore
         while (mainWindow != null && mainWindow.IsOpen)
         {
 
-            ProcessSystemMessages();
+            ProcessSystemMessages(); // Central message processing
 
 
             ClickServer.Instance.Process();
             SceneTree.Instance.Process();
+
 
 
             mainWindow.RenderFrame();
@@ -117,6 +118,7 @@ public sealed class ApplicationCore
 
         }
     }
+
 
     private void ProcessSystemMessages()
     {
@@ -129,52 +131,26 @@ public sealed class ApplicationCore
                 break;
             }
 
+            // --- Soft Modal Input Filtering ---
             if (modalStack.Count > 0)
             {
                 var topModal = modalStack.Peek();
                 if (topModal != null && topModal.Handle != IntPtr.Zero)
                 {
-                    bool isMessageForTopModalOrChild = (msg.hwnd == topModal.Handle) || NativeMethods.IsChild(topModal.Handle, msg.hwnd);
-                    bool isMessageForAnyAncestorModal = false;
+                    // Is the message for the top modal window or one of its children/owned windows?
+                    bool isMessageForTopModal = (msg.hwnd == topModal.Handle) || NativeMethods.IsChild(topModal.Handle, msg.hwnd);
 
-                    if (!isMessageForTopModalOrChild)
+                    if (!isMessageForTopModal)
                     {
-                        IntPtr ancestor = NativeMethods.GetAncestor(msg.hwnd, NativeMethods.GA_ROOT);
-                        foreach (var modal in modalStack)
-                        {
-                            if (ancestor == modal.Handle)
-                            {
-                                isMessageForAnyAncestorModal = true;
-                                break;
-                            }
-                        }
-                    }
-
-
-                    if (!isMessageForTopModalOrChild && !isMessageForAnyAncestorModal)
-                    {
-
-                        if (_verboseModalInputLog)
-                        {
-                            bool isTopModalChild = NativeMethods.IsChild(topModal.Handle, msg.hwnd);
-                            IntPtr ancestor = NativeMethods.GetAncestor(msg.hwnd, NativeMethods.GA_ROOT);
-                            Log.Info($"Modal Filter: msg=0x{msg.message:X} for hwnd={msg.hwnd}. TopModal='{topModal.Title}' ({topModal.Handle}). IsTopModal={msg.hwnd == topModal.Handle}, IsTopChild={isTopModalChild}, IsAncestorModal={isMessageForAnyAncestorModal} (Ancestor={ancestor}). Discarding.");
-                        }
-
-                        if (msg.message >= NativeMethods.WM_MOUSEFIRST && msg.message <= NativeMethods.WM_MOUSELAST ||
-                            msg.message >= NativeMethods.WM_KEYFIRST && msg.message <= NativeMethods.WM_KEYLAST)
-                        {
-
-                            continue;
-                        }
-                    }
-                    else if (_verboseModalInputLog)
-                    {
-                        bool isTopModalChild = NativeMethods.IsChild(topModal.Handle, msg.hwnd);
-                        Log.Info($"Modal Filter: msg=0x{msg.message:X} for hwnd={msg.hwnd}. TopModal='{topModal.Title}' ({topModal.Handle}). IsTopModal={msg.hwnd == topModal.Handle}, IsTopChild={isTopModalChild}, IsAncestorModal={isMessageForAnyAncestorModal}. Processing.");
+                        // If a modal is active, discard messages not meant for it or its children.
+                        // Exception: Allow WM_PAINT messages through? Maybe not needed if invalidated correctly.
+                        // Log.Info($"Modal active ({topModal.Title}), discarding msg {msg.message} for hwnd {msg.hwnd}", true);
+                        continue; // Skip Translate/Dispatch
                     }
                 }
+                // If topModal is null or handle is zero, something is wrong with the stack. Process anyway? Log error?
             }
+            // --- End Soft Modal Input Filtering ---
 
 
             NativeMethods.TranslateMessage(ref msg);
@@ -185,10 +161,12 @@ public sealed class ApplicationCore
 
     private void RenderSecondaryWindows()
     {
+        // Create a copy for safe iteration, as the list might change during rendering/processing
         var windowsToRender = new List<SecondaryWindow>(secondaryWindows);
 
         foreach (var window in windowsToRender)
         {
+            // Check IsOpen again inside the loop in case a previous window's processing closed this one
             if (window.IsOpen)
             {
                 window.RenderFrame();
@@ -206,10 +184,10 @@ public sealed class ApplicationCore
     private void Cleanup()
     {
         Log.Info("ApplicationCore Cleanup starting.");
-        CloseAllSecondaryWindows();
+        CloseAllSecondaryWindows(); // Ensure secondary windows are requested to close
         mainWindow?.Dispose();
         mainWindow = null;
-        modalStack.Clear();
+        modalStack.Clear(); // Clear modal stack
         Log.Info("ApplicationCore Cleanup finished.");
     }
 
@@ -218,11 +196,12 @@ public sealed class ApplicationCore
         var windowsToClose = new List<SecondaryWindow>(secondaryWindows);
         foreach (var window in windowsToClose)
         {
-            if (window.IsOpen)
+            if (window.IsOpen) // Only close if not already closing
             {
                 window.Close();
             }
         }
+        // Don't Clear() here, let them remove themselves via WM_DESTROY -> Unregister
     }
 
     internal void RegisterSecondaryWindow(SecondaryWindow window)
@@ -241,10 +220,11 @@ public sealed class ApplicationCore
         if (secondaryWindows.Remove(window))
         {
             Log.Info($"Unregistered secondary window: {window.Title}");
-
+            // Also remove from modal stack if it's there
             if (modalStack.Contains(window))
             {
-
+                // This is tricky if it's not the top one, but Destroy should only happen for the top one first?
+                // A cleaner way might be to check and pop in UnregisterModal
                 Log.Warning($"Window '{window.Title}' was potentially in modal stack during unregistration. Ensure UnregisterModal was called.");
             }
         }
@@ -256,9 +236,8 @@ public sealed class ApplicationCore
         {
             Log.Info($"Pushing modal window '{window.Title}' ({window.Handle}) to stack.");
             modalStack.Push(window);
-
+            // Maybe bring window to front?
             NativeMethods.BringWindowToTop(window.Handle);
-            NativeMethods.SetActiveWindow(window.Handle);
         }
     }
 
@@ -268,50 +247,41 @@ public sealed class ApplicationCore
         {
             Log.Info($"Popping modal window '{window.Title}' ({window.Handle}) from stack.");
             modalStack.Pop();
-
+            // Activate the next modal window if any, or the main window
             ActivateTopWindow();
         }
         else if (modalStack.Contains(window))
         {
+            // This shouldn't normally happen - closing a modal that's not on top.
             Log.Error($"Attempted to unregister modal window '{window.Title}' which is not on top of the stack!");
-
+            // Force remove it anyway? Or leave it? Leaving it might break input filtering.
+            // Let's try removing it carefully, though it indicates a logic flaw elsewhere.
             var tempList = new List<SecondaryWindow>(modalStack);
             tempList.Remove(window);
             modalStack.Clear();
             for (int i = tempList.Count - 1; i >= 0; i--) modalStack.Push(tempList[i]);
-            ActivateTopWindow();
+            ActivateTopWindow(); // Activate whatever is now on top
         }
     }
 
     private void ActivateTopWindow()
     {
         IntPtr hwndToActivate = IntPtr.Zero;
-        string windowTitle = "None";
-
         if (modalStack.Count > 0)
         {
             hwndToActivate = modalStack.Peek().Handle;
-            windowTitle = modalStack.Peek().Title;
-            Log.Info($"Activating next modal window: {windowTitle} ({hwndToActivate})");
+            Log.Info($"Activating next modal window: {modalStack.Peek().Title} ({hwndToActivate})");
         }
         else if (mainWindow != null && mainWindow.Handle != IntPtr.Zero)
         {
             hwndToActivate = mainWindow.Handle;
-            windowTitle = mainWindow.Title;
-            Log.Info($"Activating main window: {windowTitle} ({hwndToActivate})");
+            Log.Info($"Activating main window: {mainWindow.Title} ({hwndToActivate})");
         }
-
 
         if (hwndToActivate != IntPtr.Zero && NativeMethods.IsWindow(hwndToActivate))
         {
-
-            NativeMethods.BringWindowToTop(hwndToActivate);
-            NativeMethods.SetActiveWindow(hwndToActivate);
-            Log.Info($"Called SetActiveWindow/BringWindowToTop for '{windowTitle}' ({hwndToActivate}).");
-        }
-        else
-        {
-            Log.Warning($"Could not activate top window. Target HWND {hwndToActivate} is invalid or zero.");
+            NativeMethods.SetActiveWindow(hwndToActivate); // Focus the window
+            NativeMethods.BringWindowToTop(hwndToActivate); // Ensure it's visually on top
         }
     }
 
@@ -477,7 +447,7 @@ public class Button : Control
     private bool wasHovered = false;
     private string displayedText = "";
     private string _text = "";
-    private static bool _verboseInputLog = false;
+    private static bool _verboseInputLog = false; // Set true for detailed button logging
 
     public Vector2 TextOffset { get; set; } = Vector2.Zero;
     public HAlignment TextHAlignment { get; set; } = HAlignment.Center;
@@ -505,7 +475,7 @@ public class Button : Control
             if (_text == value) return;
             _text = value;
             displayedText = value;
-
+            // TODO: Add calls to ResizeToFitText and ClipDisplayedText if implemented
         }
     }
 
@@ -518,21 +488,21 @@ public class Button : Control
     {
         Size = new(100, 26);
         Offset = Vector2.Zero;
-        OriginPreset = OriginPreset.None;
+        OriginPreset = OriginPreset.None; // Control handles origin/alignment
 
         WasDisabled += (button) => Themes.Current = Disabled ? Themes.Disabled : Themes.Normal;
-
+        // Focus changes are handled by Control, theme update happens in Process
     }
 
     public override void Process()
     {
-        base.Process();
+        base.Process(); // Handle Control processing (focus, disabling)
 
         if (Disabled)
         {
-
+            // Ensure correct theme if disabled during runtime
             if (Themes.Current != Themes.Disabled) Themes.Current = Themes.Disabled;
-
+            // Reset hover/pressed state if disabled while interacting
             if (wasHovered) { wasHovered = false; MouseExited?.Invoke(this); }
             pressedLeft = false;
             pressedRight = false;
@@ -540,11 +510,11 @@ public class Button : Control
         }
 
 
-        HandleClicks();
+        HandleClicks(); // Uses context-aware checks now
+        // HandleKeyboardInput(); // Deferred for secondary windows
 
 
-
-        UpdateTheme();
+        UpdateTheme(); // Update theme based on hover/press/focus state
     }
 
     protected virtual void OnEnterPressed() { }
@@ -552,13 +522,13 @@ public class Button : Control
 
     private void HandleKeyboardInput()
     {
-
+        // Only handles main window focus/input for now
         if (!Focused || GetOwningWindowNode() != null)
         {
             return;
         }
 
-        if (!Input.IsKeyPressed(KeyCode.Enter))
+        if (!Input.IsKeyPressed(KeyCode.Enter)) // Checks global input
         {
             return;
         }
@@ -585,7 +555,7 @@ public class Button : Control
 
     private void HandleClicks()
     {
-        bool isMouseOver = IsMouseOver();
+        bool isMouseOver = IsMouseOver(); // IsMouseOver is now context-aware
         WindowNode? ownerWindow = GetOwningWindowNode();
         Log.Info($"Button '{Name}' HandleClicks. IsMouseOver={isMouseOver}. OwnerWindow={(ownerWindow?.Name ?? "None")}", _verboseInputLog);
 
@@ -604,15 +574,15 @@ public class Button : Control
             rightClickInvoked = HandleSingleClick(ownerWindow, ref pressedRight, MouseButtonCode.Right, RightClickActionMode, RightClicked);
         }
 
-        HandleHover(isMouseOver);
+        HandleHover(isMouseOver); // Pass context-aware IsMouseOver result
     }
 
     private bool HandleSingleClick(WindowNode? ownerWindow, ref bool pressedState, MouseButtonCode button, ActionMode mode, Action<Button>? handler)
     {
         bool invoked = false;
-        bool mouseOver = IsMouseOver();
+        bool mouseOver = IsMouseOver(); // Context-aware
 
-
+        // Get button state from the correct source
         bool buttonPressedThisFrame;
         bool buttonReleasedThisFrame;
         if (ownerWindow != null)
@@ -633,7 +603,7 @@ public class Button : Control
         {
             Log.Info($"Button '{Name}' ({button}) Pressed Over Control.", _verboseInputLog);
             pressedState = true;
-            HandleClickFocus();
+            HandleClickFocus(); // Context-aware focus attempt
 
             if (mode == ActionMode.Press)
             {
@@ -648,7 +618,7 @@ public class Button : Control
         if (buttonReleasedThisFrame)
         {
             Log.Info($"Button '{Name}' ({button}) Button released this frame. WasPressedState={pressedState}", _verboseInputLog);
-            if (pressedState)
+            if (pressedState) // Only trigger release if it was previously pressed
             {
                 if (!Disabled && mouseOver && mode == ActionMode.Release)
                 {
@@ -658,7 +628,7 @@ public class Button : Control
                     invoked = true;
                 }
 
-
+                // Don't reset pressedState here if StayPressed is true
                 if (!StayPressed)
                 {
                     Log.Info($"Button '{Name}' ({button}) Resetting pressed state (Not StayPressed).", _verboseInputLog);
@@ -666,7 +636,8 @@ public class Button : Control
                 }
                 else
                 {
-
+                    // If StayPressed, maybe toggle it? Or require another click? Depends on desired UX.
+                    // For now, it just stays pressed until disabled or mouse leaves (handled in HandleHover).
                     Log.Info($"Button '{Name}' ({button}) Maintaining pressed state (StayPressed).", _verboseInputLog);
                 }
             }
@@ -677,7 +648,7 @@ public class Button : Control
     }
 
 
-    private void HandleHover(bool isMouseOver)
+    private void HandleHover(bool isMouseOver) // Takes context-aware result
     {
         if (Disabled)
         {
@@ -707,7 +678,7 @@ public class Button : Control
                 wasHovered = false;
                 MouseExited?.Invoke(this);
             }
-
+            // Reset pressed state if mouse leaves while button held (unless StayPressed)
             if (!StayPressed)
             {
                 if (pressedLeft || pressedRight) Log.Info($"Button '{Name}' Resetting pressed state on mouse exit.", _verboseInputLog);
@@ -725,10 +696,10 @@ public class Button : Control
             return;
         }
 
-        bool isMouseOver = IsMouseOver();
+        bool isMouseOver = IsMouseOver(); // Context-aware
         WindowNode? ownerWindow = GetOwningWindowNode();
 
-
+        // Get correct mouse down state
         bool isLeftDown;
         bool isRightDown;
         if (ownerWindow != null)
@@ -746,18 +717,19 @@ public class Button : Control
             ((Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && isLeftDown ||
              (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && isRightDown);
 
-
+        // Determine effective pressed state for theme
+        // Use the 'pressedLeft'/'pressedRight' state flags which are managed by HandleSingleClick
         bool isEffectivelyPressed = (pressedLeft || pressedRight) || isPhysicallyHeldDown;
+        // Note: If StayPressed, pressedLeft/Right might be true even if not physically held
 
 
-
-        var oldTheme = Themes.Current;
+        var oldTheme = Themes.Current; // For logging change
 
         if (isEffectivelyPressed)
         {
             Themes.Current = Themes.Pressed;
         }
-        else if (Focused)
+        else if (Focused) // Focus state is currently only reliable for main window
         {
             Themes.Current = isMouseOver ? Themes.Hover : Themes.Focused;
         }
@@ -770,14 +742,14 @@ public class Button : Control
             Themes.Current = Themes.Normal;
         }
 
-        if (oldTheme != Themes.Current) Log.Info($"Button '{Name}' Theme changed to {Themes.Current.GetType().Name}", _verboseInputLog);
+        if (oldTheme != Themes.Current) Log.Info($"Button '{Name}' Theme changed to {Themes.Current.GetType().Name}", _verboseInputLog); // Basic theme change log
     }
 
     protected override void OnThemeFileChanged(string themeFile)
     {
 
         Log.Warning($"OnThemeFileChanged not fully implemented for Button: {themeFile}");
-
+        // Need to reload ButtonStylePack from the file
     }
 
 
@@ -786,17 +758,17 @@ public class Button : Control
         if (!Visible) return;
 
         DrawBackground(context);
-
+        // DrawIcon(context); // Not implemented
         DrawText(context);
     }
 
     private void DrawBackground(DrawingContext context)
     {
-        var position = GlobalPosition - Origin;
-        var size = ScaledSize;
+        var position = GlobalPosition - Origin; // Control handles position/origin
+        var size = ScaledSize; // Control handles scale
         var bounds = new Rect(position.X, position.Y, size.X, size.Y);
 
-        DrawStyledRectangle(context, bounds, Themes.Current);
+        DrawStyledRectangle(context, bounds, Themes.Current); // Uses context-aware resource creation
     }
 
     private void DrawIcon(DrawingContext context)
@@ -808,7 +780,7 @@ public class Button : Control
 
 
         Log.Warning("DrawIcon is not implemented.");
-
+        // Implementation would need bitmap loading and drawing via context.RenderTarget
     }
 
     private void DrawText(DrawingContext context)
@@ -827,9 +799,9 @@ public class Button : Control
         );
 
 
-        DrawFormattedText(
+        DrawFormattedText( // Uses context-aware resource creation
             context,
-            displayedText,
+            displayedText, // TODO: Add clipping logic if needed
             textLayoutRect,
             Themes.Current,
             TextHAlignment,
@@ -840,7 +812,7 @@ public class Button : Control
 
     private void ResizeToFitText()
     {
-
+        // Requires DirectWrite text metrics - complex
         if (!AutoWidth || Themes?.Current is null)
         {
             return;
@@ -848,13 +820,14 @@ public class Button : Control
 
 
         Log.Warning("ResizeToFitText requires DirectWrite implementation.");
-
-
+        // Get TextFormat using GetOrCreateTextFormat
+        // Use DWriteFactory.CreateTextLayout to measure text
+        // Update Size property based on measurement + margins
     }
 
     private void ClipDisplayedText()
     {
-
+        // Requires DirectWrite text metrics - complex
         if (!ClipText || string.IsNullOrEmpty(Text) || Themes?.Current is null)
         {
             displayedText = Text;
@@ -863,17 +836,19 @@ public class Button : Control
 
 
         Log.Warning("ClipDisplayedText requires DirectWrite implementation.");
+        // Get TextFormat using GetOrCreateTextFormat
+        // Use DWriteFactory.CreateTextLayout with max width (Size.X - Margins.X * 2)
+        // Use layout.GetLineMetrics to check if clipped
+        // If clipped, progressively remove characters and add Ellipsis until it fits (binary search approach is faster)
+        // Update displayedText
 
-
-
-
-        displayedText = Text;
+        displayedText = Text; // Placeholder
     }
 
     private string GetTextClippedWithEllipsis(string input)
     {
-
-        if (input.Length > Ellipsis.Length + 5)
+        // Basic placeholder, real clipping needs text measurement
+        if (input.Length > Ellipsis.Length + 5) // Arbitrary cutoff
         {
             return input.Substring(0, input.Length - Ellipsis.Length - 2) + Ellipsis;
         }
@@ -1213,22 +1188,18 @@ public class Configuration
 </file>
 
 <file path="Control.cs">
+// File: Control.cs
+// Summary: Added GetOwningWindowNode helper and modified IsMouseOver to use local coordinates
+//          when inside a secondary window. Adjusted focus logic slightly for window context.
 using System;
-using System.Collections.Generic;
-using System.Numerics;
-using Vortice.Mathematics;
+using System.Collections.Generic; // Required for Dictionary
+using System.Numerics;           // Required for Vector2
+using Vortice.Mathematics;       // Required for Rect
 
 namespace Cherris;
 
-public class Control : ClickableRectangle
+public class Control : ClickableRectangle // Inherits IsMouseOver from ClickableRectangle
 {
-    private bool wasFocusedLastFrame = false;
-    private readonly Dictionary<string, float> actionHoldTimes = [];
-    private bool fieldDisabled = false;
-    private bool fieldFocused = false;
-    private static bool _verboseControlInputLog = false;
-
-
     public bool Focusable { get; set; } = true;
     public bool Navigable { get; set; } = true;
     public bool RapidNavigation { get; set; } = true;
@@ -1241,52 +1212,54 @@ public class Control : ClickableRectangle
     public string AudioBus { get; set; } = "Master";
     public Sound? FocusGainedSound { get; set; }
 
+    private bool wasFocusedLastFrame = false;
+    private readonly Dictionary<string, float> actionHoldTimes = [];
     private const float InitialDelay = 0.5f;
     private const float RepeatInterval = 0.1f;
 
     public bool Disabled
     {
-        get => fieldDisabled;
+        get => field;
         set
         {
-            if (value == fieldDisabled)
+            if (value == field)
             {
                 return;
             }
 
-            fieldDisabled = value;
+            field = value;
             WasDisabled?.Invoke(this);
-            if (value && fieldFocused)
+            if (value && Focused) // Lose focus if disabled
             {
                 Focused = false;
             }
         }
-    }
+    } = false;
 
     public bool Focused
     {
-        get => fieldFocused;
+        get => field;
         set
         {
-            if (fieldFocused == value)
+            if (field == value)
             {
                 return;
             }
-            fieldFocused = value;
+            field = value;
             FocusChanged?.Invoke(this);
 
-            if (fieldFocused)
+            if (field)
             {
                 FocusGained?.Invoke(this);
 
-                FocusGainedSound?.Play(AudioBus);
+                FocusGainedSound?.Play(AudioBus); // Null propagation handles null sound
             }
-            else
+            else // Reset action times when focus is lost
             {
                 actionHoldTimes.Clear();
             }
         }
-    }
+    } = false;
 
     public string ThemeFile
     {
@@ -1306,30 +1279,31 @@ public class Control : ClickableRectangle
 
     public override void Process()
     {
-        base.Process();
+        base.Process(); // Process from Node -> VisualItem -> Clickable -> ClickableRectangle
 
 
-        if (Disabled)
+        if (Disabled) // Early exit if disabled
         {
-
+            // Ensure focus is lost if disabled during runtime
             if (Focused) Focused = false;
             return;
         }
 
 
+        // Focus logic depends heavily on the main window currently
         WindowNode? ownerWindow = GetOwningWindowNode();
-        if (ownerWindow == null)
+        if (ownerWindow == null) // Only handle focus logic if in main window
         {
             if (Navigable && Focused && wasFocusedLastFrame)
             {
                 HandleArrowNavigation();
             }
-            UpdateFocusOnOutsideClicked();
+            UpdateFocusOnOutsideClicked(); // Uses IsMouseOver which is now context-aware
         }
         else
         {
-
-            UpdateFocusOnOutsideClicked();
+            // Handle input specific to secondary window controls if needed (e.g., clicked outside)
+            UpdateFocusOnOutsideClicked(); // Check clicks outside based on local input
         }
 
 
@@ -1339,7 +1313,9 @@ public class Control : ClickableRectangle
 
     private void HandleArrowNavigation()
     {
-
+        // This currently only works for the main window as it uses global Input actions
+        // Adapting this for secondary windows would require passing local key state
+        // or a more complex input mapping system.
         var actions = new (string Action, string? Path)[]
         {
             ("UiLeft", FocusNeighborLeft),
@@ -1358,7 +1334,7 @@ public class Control : ClickableRectangle
 
             if (RapidNavigation)
             {
-                if (Input.IsActionDown(entry.Action))
+                if (Input.IsActionDown(entry.Action)) // Uses global Input
                 {
                     if (!actionHoldTimes.ContainsKey(entry.Action))
                     {
@@ -1383,7 +1359,7 @@ public class Control : ClickableRectangle
             }
             else
             {
-                if (Input.IsActionPressed(entry.Action))
+                if (Input.IsActionPressed(entry.Action)) // Uses global Input
                 {
                     NavigateToControl(entry.Path, entry.Action, 0f);
                 }
@@ -1411,7 +1387,7 @@ public class Control : ClickableRectangle
 
         if (RapidNavigation)
         {
-
+            // Pass hold time only if the neighbor is also in the main window (or adapt later)
             if (neighbor.GetOwningWindowNode() == null)
             {
                 neighbor.actionHoldTimes[action] = holdTime;
@@ -1432,45 +1408,46 @@ public class Control : ClickableRectangle
 
         if (ownerWindow != null)
         {
-
+            // Check local input for secondary window
             isPressed = ownerWindow.IsLocalMouseButtonPressed(MouseButtonCode.Left);
         }
         else
         {
-
+            // Check global input for main window
             isPressed = Input.IsMouseButtonPressed(MouseButtonCode.Left);
         }
 
 
-        if (!IsMouseOver() && isPressed)
+        if (!IsMouseOver() && isPressed) // IsMouseOver is now context-aware
         {
-
+            // Currently, only main window controls handle focus this way
             if (ownerWindow == null && Focused)
             {
                 Focused = false;
                 ClickedOutside?.Invoke(this);
             }
-
+            // We might want secondary window controls to notify they were clicked outside,
+            // even if they don't have a formal "focused" state yet.
             else if (ownerWindow != null)
             {
-                ClickedOutside?.Invoke(this);
+                ClickedOutside?.Invoke(this); // Notify anyway
             }
         }
     }
 
     protected virtual void HandleClickFocus()
     {
-
+        // Focus gain on click only makes sense for the main window currently
         WindowNode? ownerWindow = GetOwningWindowNode();
-        if (ownerWindow == null && Focusable && IsMouseOver())
+        if (ownerWindow == null && Focusable && IsMouseOver()) // IsMouseOver is context-aware
         {
-
+            // Check global input for main window click
             if (Input.IsMouseButtonPressed(MouseButtonCode.Left) || Input.IsMouseButtonPressed(MouseButtonCode.Right))
             {
                 Focused = true;
             }
         }
-
+        // For secondary windows, focus is not automatically handled on click yet.
     }
 
 
@@ -1490,42 +1467,46 @@ public class Control : ClickableRectangle
 
         if (ownerWindow != null)
         {
-
+            // --- Secondary Window Logic ---
             mousePosition = ownerWindow.LocalMousePosition;
 
 
-            var localPos = Position;
+            // Assume Node2D Position is relative to the window's top-left client area
+            // This is a simplification! It breaks if the WindowNode itself is transformed
+            // or if there are intermediate Node2Ds with transformations.
+            var localPos = Position; // Use local Position, not GlobalPosition
 
 
             bounds = new Rect(localPos.X - origin.X, localPos.Y - origin.Y, scaledSize.X, scaledSize.Y);
 
 
-            Log.Info($"Control '{Name}' (Win: {ownerWindow.Name}): LocalMouse={mousePosition}, LocalPos={localPos}, Origin={origin}, ScaledSize={scaledSize}, Bounds={bounds}", _verboseControlInputLog);
+            // Log.Info($"Control '{Name}' (Win: {ownerWindow.Name}): Mouse={mousePosition}, Bounds={bounds}", Button._verboseInputLog); // Optional verbose log
         }
         else
         {
+            // --- Main Window Logic ---
+            mousePosition = Input.MousePosition; // Global input mouse position (screen coords)
 
-            mousePosition = Input.MousePosition;
 
-
+            // GlobalPosition is relative to the scene, potentially affected by cameras.
+            // Direct2D rendering happens in screen space, so bounds should also be.
+            // For simplicity, assume GlobalPosition IS screen position for now.
+            // A proper solution involves Viewports/Cameras converting world->screen.
             var globalPos = GlobalPosition;
 
 
             bounds = new Rect(globalPos.X - origin.X, globalPos.Y - origin.Y, scaledSize.X, scaledSize.Y);
 
 
-            Log.Info($"Control '{Name}' (MainWin): GlobalMouse={mousePosition}, GlobalPos={globalPos}, Origin={origin}, ScaledSize={scaledSize}, Bounds={bounds}", _verboseControlInputLog);
+            // Log.Info($"Control '{Name}' (MainWin): Mouse={mousePosition}, Bounds={bounds}", Button._verboseInputLog); // Optional verbose log
         }
 
 
 
         bool contains = bounds.Contains(mousePosition);
-        if (_verboseControlInputLog && contains != wasHoveredLastFrame) Log.Info($"Control '{Name}' IsMouseOver changed to {contains}");
-        wasHoveredLastFrame = contains;
+        // if(Button._verboseInputLog && contains) Log.Info($"Control '{Name}' IsMouseOver = TRUE");
         return contains;
     }
-
-    private bool wasHoveredLastFrame = false;
 }
 </file>
 
@@ -2751,12 +2732,14 @@ namespace Cherris;
 
 public class ModalSecondaryWindow : SecondaryWindow
 {
-
+    // No longer need ownerHwnd stored here for EnableWindow
+    // private readonly IntPtr ownerHwnd;
 
     public ModalSecondaryWindow(string title, int width, int height, WindowNode ownerNode, IntPtr ownerHandle)
-        : base(title, width, height, ownerNode)
+        : base(title, width, height, ownerNode) // Pass ownerNode to base
     {
-
+        // We still need ownerHandle for CreateWindowEx's parent parameter
+        // this.ownerHwnd = ownerHandle; // Not needed for EnableWindow now
     }
 
 
@@ -2764,44 +2747,46 @@ public class ModalSecondaryWindow : SecondaryWindow
     {
 
         uint defaultModalStyle = NativeMethods.WS_POPUP | NativeMethods.WS_CAPTION | NativeMethods.WS_SYSMENU |
-                                 NativeMethods.WS_THICKFRAME;
+                                 NativeMethods.WS_THICKFRAME; // WS_VISIBLE removed, ShowWindow will handle it
+                                                              // Using WS_POPUP often implies WS_BORDER
 
 
-        var ownerHwnd = ApplicationCore.Instance.GetMainWindowHandle();
+        // Get the actual owner handle needed for CreateWindowEx
+        var ownerHwnd = ApplicationCore.Instance.GetMainWindowHandle(); // Or pass explicitly if needed elsewhere
 
         return base.TryCreateWindow(ownerHwnd, styleOverride ?? defaultModalStyle);
     }
 
     public override void ShowWindow()
     {
+        // Don't disable owner window here
 
-
-        base.ShowWindow();
-        ApplicationCore.Instance.RegisterModal(this);
+        base.ShowWindow(); // Shows this modal window (sets WS_VISIBLE)
+        ApplicationCore.Instance.RegisterModal(this); // Register AFTER handle is valid and window is shown
     }
 
     protected override void OnDestroy()
     {
-
+        // Don't re-enable owner window here
 
         Log.Info($"Modal '{Title}' OnDestroy. Unregistering from modal stack.");
         ApplicationCore.Instance.UnregisterModal(this);
-        base.OnDestroy();
+        base.OnDestroy(); // Calls base SecondaryWindow -> Win32Window destroy logic
     }
 
 
     protected override bool OnClose()
     {
         Log.Info($"ModalSecondaryWindow '{Title}' OnClose called.");
+        // Don't re-enable owner window here
 
-
-        return base.OnClose();
+        return base.OnClose(); // Base handles node freeing etc.
     }
 
-
+    // Override HandleMessage to add logging for input messages (Optional)
     protected override IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        bool logInput = false;
+        bool logInput = false; // Set to true for verbose input logging
 
         switch (msg)
         {
@@ -2812,18 +2797,18 @@ public class ModalSecondaryWindow : SecondaryWindow
                 Log.Info($"Modal '{Title}' received WM_LBUTTONUP", logInput);
                 break;
             case NativeMethods.WM_MOUSEMOVE:
-
+                // Too noisy for default logging
                 break;
-
-            case NativeMethods.WM_ACTIVATE:
+            // Add other messages if needed
+            case NativeMethods.WM_ACTIVATE: // Log activation changes
                 Log.Info($"Modal '{Title}' received WM_ACTIVATE (wParam: {wParam})", logInput);
                 break;
-            case NativeMethods.WM_NCACTIVATE:
+            case NativeMethods.WM_NCACTIVATE: // Log non-client activation changes
                 Log.Info($"Modal '{Title}' received WM_NCACTIVATE (wParam: {wParam})", logInput);
                 break;
         }
 
-
+        // Call the base SecondaryWindow HandleMessage to update local state
         return base.HandleMessage(hWnd, msg, wParam, lParam);
     }
 }
@@ -2936,9 +2921,9 @@ internal static class NativeMethods
     public const uint CS_OWNDC = 0x0020;
 
     public const uint WS_OVERLAPPED = 0x00000000;
-    public const uint WS_CAPTION = 0x00C00000;
+    public const uint WS_CAPTION = 0x00C00000;     /* WS_BORDER | WS_DLGFRAME  */
     public const uint WS_SYSMENU = 0x00080000;
-    public const uint WS_THICKFRAME = 0x00040000;
+    public const uint WS_THICKFRAME = 0x00040000; // For resizing
     public const uint WS_MINIMIZEBOX = 0x00020000;
     public const uint WS_MAXIMIZEBOX = 0x00010000;
     public const uint WS_OVERLAPPEDWINDOW = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
@@ -2946,7 +2931,7 @@ internal static class NativeMethods
     public const uint WS_POPUP = 0x80000000;
     public const uint WS_BORDER = 0x00800000;
     public const uint WS_DLGFRAME = 0x00400000;
-    public const uint WS_CHILD = 0x40000000;
+    public const uint WS_CHILD = 0x40000000; // Added
 
 
     public const int WM_NCCREATE = 0x0081;
@@ -2973,14 +2958,8 @@ internal static class NativeMethods
     public const int WM_QUIT = 0x0012;
     public const int WM_PARENTNOTIFY = 0x0210;
     public const int WM_ENTERIDLE = 0x0121;
-    public const int WM_ACTIVATE = 0x0006;
-    public const int WM_NCACTIVATE = 0x0086;
-
-
-    public const uint WM_MOUSEFIRST = 0x0200;
-    public const uint WM_MOUSELAST = 0x020E;
-    public const uint WM_KEYFIRST = 0x0100;
-    public const uint WM_KEYLAST = 0x0109;
+    public const int WM_ACTIVATE = 0x0006; // Added
+    public const int WM_NCACTIVATE = 0x0086; // Added
 
 
     public const int CW_USEDEFAULT = unchecked((int)0x80000000);
@@ -2989,7 +2968,7 @@ internal static class NativeMethods
     public const int GWLP_USERDATA = -21;
     public const int GCLP_HBRBACKGROUND = -10;
     public const int GWL_STYLE = -16;
-    public const uint GA_ROOT = 2;
+    public const uint GA_ROOT = 2; // Added for GetAncestor
 
 
     public const int IDI_APPLICATION = 32512;
@@ -3156,14 +3135,14 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool BringWindowToTop(IntPtr hWnd);
+    public static extern bool BringWindowToTop(IntPtr hWnd); // Added
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
+    public static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd); // Added
 
     [DllImport("user32.dll")]
-    public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
+    public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags); // Added
 
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
@@ -4625,9 +4604,9 @@ public class SecondaryWindow : Direct2DAppWindow
     private readonly HashSet<KeyCode> currentKeysDown = [];
     private readonly HashSet<MouseButtonCode> currentMouseButtonsDown = [];
     private Vector2 currentMousePosition = Vector2.Zero;
-    private float currentMouseWheelDelta = 0f;
-    private readonly HashSet<KeyCode> previousKeysDown = [];
-    private readonly HashSet<MouseButtonCode> previousMouseButtonsDown = [];
+    private float currentMouseWheelDelta = 0f; // Added for local wheel state
+    private readonly HashSet<KeyCode> previousKeysDown = []; // Added for local pressed/released
+    private readonly HashSet<MouseButtonCode> previousMouseButtonsDown = []; // Added for local pressed/released
 
     public SecondaryWindow(string title, int width, int height, WindowNode owner)
         : base(title, width, height)
@@ -4647,7 +4626,7 @@ public class SecondaryWindow : Direct2DAppWindow
         Log.Info($"SecondaryWindow '{Title}' OnClose called.");
 
 
-        ownerNode?.QueueFree();
+        ownerNode?.QueueFree(); // Request the node be freed
 
 
         return base.OnClose();
@@ -5226,7 +5205,7 @@ public abstract class Win32Window : IDisposable
     private IntPtr _hInstance = IntPtr.Zero;
     private NativeMethods.WndProc _wndProcDelegate;
     private bool _isDisposed = false;
-    private static readonly Dictionary<string, NativeMethods.WndProc> RegisteredClassProcedures = new();
+    private static readonly HashSet<string> RegisteredClassNames = new HashSet<string>();
     private GCHandle _gcHandle;
 
     public IntPtr Handle => _hwnd;
@@ -5244,8 +5223,6 @@ public abstract class Win32Window : IDisposable
         Width = _initialWidth;
         Height = _initialHeight;
         _windowClassName = className ?? ("Win32Window_" + Guid.NewGuid().ToString("N"));
-
-
         _wndProcDelegate = WindowProcedure;
 
     }
@@ -5264,9 +5241,9 @@ public abstract class Win32Window : IDisposable
             _hInstance = Process.GetCurrentProcess().Handle;
         }
 
-        lock (RegisteredClassProcedures)
+        lock (RegisteredClassNames)
         {
-            if (!RegisteredClassProcedures.ContainsKey(_windowClassName))
+            if (!RegisteredClassNames.Contains(_windowClassName))
             {
                 var wndClass = new NativeMethods.WNDCLASSEX
                 {
@@ -5289,13 +5266,12 @@ public abstract class Win32Window : IDisposable
                     Log.Error($"RegisterClassEx failed: {Marshal.GetLastWin32Error()}");
                     return false;
                 }
-                RegisteredClassProcedures.Add(_windowClassName, _wndProcDelegate);
+                RegisteredClassNames.Add(_windowClassName);
                 Log.Info($"Class '{_windowClassName}' registered.");
             }
         }
 
-
-        _gcHandle = GCHandle.Alloc(this); // Use a strong handle
+        _gcHandle = GCHandle.Alloc(this);
 
         uint windowStyle = styleOverride ?? NativeMethods.WS_OVERLAPPEDWINDOW;
 
@@ -5309,13 +5285,11 @@ public abstract class Win32Window : IDisposable
             ownerHwnd,
             IntPtr.Zero,
             _hInstance,
-
             GCHandle.ToIntPtr(_gcHandle));
-
 
         if (_hwnd == IntPtr.Zero)
         {
-            Log.Error($"CreateWindowEx failed for '{_windowTitle}': {Marshal.GetLastWin32Error()}");
+            Log.Error($"CreateWindowEx failed: {Marshal.GetLastWin32Error()}");
             if (_gcHandle.IsAllocated) _gcHandle.Free();
             return false;
         }
@@ -5354,7 +5328,6 @@ public abstract class Win32Window : IDisposable
     private static IntPtr WindowProcedure(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         Win32Window? window = null;
-        IntPtr userDataPtr = NativeMethods.GetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA);
 
         if (msg == NativeMethods.WM_NCCREATE)
         {
@@ -5365,52 +5338,48 @@ public abstract class Win32Window : IDisposable
                 window = handle.Target as Win32Window;
                 if (window != null)
                 {
-
-                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, cs.lpCreateParams);
-                    Log.Info($"WM_NCCREATE: Associated GCHandle {cs.lpCreateParams} with HWND {hWnd} ('{window.Title}')");
+                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, GCHandle.ToIntPtr(handle));
+                    Log.Info($"WM_NCCREATE: Associated instance with HWND {hWnd}");
                 }
                 else
                 {
-                    Log.Warning($"WM_NCCREATE: Failed to get window instance from GCHandle {cs.lpCreateParams} for HWND {hWnd}");
+                    Log.Warning($"WM_NCCREATE: Failed to get window instance from GCHandle for HWND {hWnd}");
                 }
             }
             catch (Exception ex)
             {
-                Log.Error($"Error during WM_NCCREATE processing for HWND {hWnd}: {ex}");
+                Log.Error($"Error during WM_NCCREATE: {ex}");
             }
         }
-        else if (userDataPtr != IntPtr.Zero)
+        else
         {
-            try
+            IntPtr ptr = NativeMethods.GetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA);
+            if (ptr != IntPtr.Zero)
             {
-                var handle = GCHandle.FromIntPtr(userDataPtr);
-                if (handle.IsAllocated && handle.Target != null)
+                try
                 {
-                    window = handle.Target as Win32Window;
-                }
-                else if (handle.IsAllocated && handle.Target == null)
-                {
-                    Log.Warning($"WindowProcedure: GCHandle {userDataPtr} for HWND {hWnd} target is null (likely finalized prematurely). Msg={msg:X}. Resetting GWLP_USERDATA.");
-                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
-                }
-                else
-                {
-                    Log.Warning($"WindowProcedure: GCHandle {userDataPtr} for HWND {hWnd} is not allocated. Msg={msg:X}. Resetting GWLP_USERDATA.");
-                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
-                }
-            }
-            catch (InvalidOperationException)
-            {
-                Log.Warning($"WindowProcedure: Invalid GCHandle {userDataPtr} retrieved for HWND {hWnd}, Msg={msg:X}. Resetting GWLP_USERDATA.");
+                    var handle = GCHandle.FromIntPtr(ptr);
+                    if (handle.IsAllocated && handle.Target != null)
+                    {
+                        window = handle.Target as Win32Window;
+                    }
+                    else
+                    {
 
-                NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"Error retrieving window instance from GCHandle {userDataPtr} for HWND {hWnd}: {ex}");
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    Log.Warning($"WindowProcedure: Invalid GCHandle {ptr} retrieved for HWND {hWnd}, Msg={msg}. Resetting GWLP_USERDATA.");
+
+                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"Error retrieving GCHandle: {ex}");
+                }
             }
         }
-
 
         if (window != null)
         {
@@ -5420,14 +5389,13 @@ public abstract class Win32Window : IDisposable
             }
             catch (Exception ex)
             {
-                Log.Error($"Error handling message {msg:X} for HWND {hWnd} ('{window.Title}'): {ex}");
+                Log.Error($"Error handling message {msg} for HWND {hWnd} ('{window.Title}'): {ex}");
             }
         }
         else if (msg != NativeMethods.WM_NCCREATE && msg != NativeMethods.WM_NCDESTROY)
         {
-            Log.Warning($"WindowProcedure: No associated window instance found for HWND {hWnd} (UserData: {userDataPtr}) for message {msg:X}. Using DefWindowProc.");
-        }
 
+        }
 
         return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
     }
@@ -5546,31 +5514,19 @@ public abstract class Win32Window : IDisposable
                         var handle = GCHandle.FromIntPtr(ptr);
                         if (handle.IsAllocated)
                         {
-                            Log.Info($"Freeing GCHandle {ptr} in WM_NCDESTROY for '{Title}' ({hWnd}).");
                             handle.Free();
                         }
-                        else
-                        {
-                            Log.Warning($"WM_NCDESTROY: GCHandle {ptr} for '{Title}' ({hWnd}) was already freed.");
-                        }
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        Log.Warning($"WM_NCDESTROY: GCHandle {ptr} for '{Title}' ({hWnd}) was invalid upon retrieval.");
                     }
                     catch (Exception ex)
                     {
-                        Log.Error($"Error freeing GCHandle {ptr} on NCDESTROY for '{Title}' ({hWnd}): {ex.Message}");
+                        Log.Error($"Error freeing GCHandle on NCDESTROY: {ex.Message}");
                     }
-
 
                     NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
                 }
 
-
                 if (_gcHandle.IsAllocated && GCHandle.ToIntPtr(_gcHandle) == ptr)
                 {
-
                     _gcHandle = default;
                 }
                 _hwnd = IntPtr.Zero;
@@ -5637,7 +5593,7 @@ public abstract class Win32Window : IDisposable
                 Log.Info($"Requesting destroy for window {_hwnd} ('{Title}') during Dispose...");
 
 
-                NativeMethods.DestroyWindow(_hwnd);
+                NativeMethods.DestroyWindow(_hwnd); // Should trigger WM_DESTROY/NC_DESTROY
 
             }
             else
@@ -5652,7 +5608,7 @@ public abstract class Win32Window : IDisposable
 
 
             _isDisposed = true;
-            IsOpen = false;
+            IsOpen = false; // Ensure state is updated even if called directly
             Log.Info($"Win32Window '{Title}' disposed.");
         }
     }
