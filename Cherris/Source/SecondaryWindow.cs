@@ -1,0 +1,115 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Numerics;
+
+namespace Cherris;
+
+public class SecondaryWindow : Direct2DAppWindow
+{
+    private readonly WindowNode ownerNode;
+    private readonly HashSet<KeyCode> currentKeysDown = [];
+    private readonly HashSet<MouseButtonCode> currentMouseButtonsDown = [];
+    private Vector2 currentMousePosition = Vector2.Zero;
+
+    public SecondaryWindow(string title, int width, int height, WindowNode owner)
+        : base(title, width, height)
+    {
+        ownerNode = owner ?? throw new ArgumentNullException(nameof(owner));
+        ApplicationCore.Instance.RegisterSecondaryWindow(this);
+    }
+
+    protected override void DrawUIContent(DrawingContext context)
+    {
+
+        ownerNode?.RenderChildren(context);
+    }
+
+    protected override bool OnClose()
+    {
+        Log.Info($"SecondaryWindow '{Title}' OnClose called.");
+
+
+        ownerNode?.Free();
+
+
+        return base.OnClose();
+    }
+
+    protected override void Cleanup()
+    {
+        Log.Info($"SecondaryWindow '{Title}' Cleanup starting.");
+        ApplicationCore.Instance.UnregisterSecondaryWindow(this);
+        base.Cleanup();
+        Log.Info($"SecondaryWindow '{Title}' Cleanup finished.");
+    }
+
+    protected override IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        int xPos = NativeMethods.GET_X_LPARAM(lParam);
+        int yPos = NativeMethods.GET_Y_LPARAM(lParam);
+        Vector2 mousePos = new Vector2(xPos, yPos);
+
+        switch (msg)
+        {
+            case NativeMethods.WM_MOUSEMOVE:
+                currentMousePosition = mousePos;
+                break;
+
+            case NativeMethods.WM_LBUTTONDOWN:
+                currentMouseButtonsDown.Add(MouseButtonCode.Left);
+                break;
+            case NativeMethods.WM_LBUTTONUP:
+                currentMouseButtonsDown.Remove(MouseButtonCode.Left);
+                break;
+
+            case NativeMethods.WM_RBUTTONDOWN:
+                currentMouseButtonsDown.Add(MouseButtonCode.Right);
+                break;
+            case NativeMethods.WM_RBUTTONUP:
+                currentMouseButtonsDown.Remove(MouseButtonCode.Right);
+                break;
+
+            case NativeMethods.WM_MBUTTONDOWN:
+                currentMouseButtonsDown.Add(MouseButtonCode.Middle);
+                break;
+            case NativeMethods.WM_MBUTTONUP:
+                currentMouseButtonsDown.Remove(MouseButtonCode.Middle);
+                break;
+
+            case NativeMethods.WM_XBUTTONDOWN:
+                int xButton1 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
+                if (xButton1 == NativeMethods.XBUTTON1) currentMouseButtonsDown.Add(MouseButtonCode.Side);
+                if (xButton1 == NativeMethods.XBUTTON2) currentMouseButtonsDown.Add(MouseButtonCode.Extra);
+                break;
+            case NativeMethods.WM_XBUTTONUP:
+                int xButton2 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
+                if (xButton2 == NativeMethods.XBUTTON1) currentMouseButtonsDown.Remove(MouseButtonCode.Side);
+                if (xButton2 == NativeMethods.XBUTTON2) currentMouseButtonsDown.Remove(MouseButtonCode.Extra);
+                break;
+
+            case NativeMethods.WM_KEYDOWN:
+            case NativeMethods.WM_SYSKEYDOWN:
+                int vkCodeDown = (int)wParam;
+                if (Enum.IsDefined(typeof(KeyCode), vkCodeDown))
+                {
+                    currentKeysDown.Add((KeyCode)vkCodeDown);
+                }
+                break;
+
+            case NativeMethods.WM_KEYUP:
+            case NativeMethods.WM_SYSKEYUP:
+                int vkCodeUp = (int)wParam;
+                if (Enum.IsDefined(typeof(KeyCode), vkCodeUp))
+                {
+                    currentKeysDown.Remove((KeyCode)vkCodeUp);
+                }
+                break;
+        }
+
+        return base.HandleMessage(hWnd, msg, wParam, lParam);
+    }
+
+    public bool IsKeyDown(KeyCode key) => currentKeysDown.Contains(key);
+    public bool IsMouseButtonDown(MouseButtonCode button) => currentMouseButtonsDown.Contains(button);
+    public Vector2 GetMousePosition() => currentMousePosition;
+}

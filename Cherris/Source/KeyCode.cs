@@ -1,0 +1,115 @@
+﻿// file: KeyCode.cs
+// Minimal KeyCode enum based on common Win32 VK codes needed
+// Reference: https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
+namespace Cherris;
+
+public enum KeyCode
+{
+    Unknown = 0,
+
+    Space = 0x20,
+    Apostrophe = 222,
+    Comma = 188,
+    Minus = 189,
+    Period = 190,
+    Slash = 191,
+    Alpha0 = 48,
+    Alpha1 = 49,
+    Alpha2 = 50,
+    Alpha3 = 51,
+    Alpha4 = 52,
+    Alpha5 = 53,
+    Alpha6 = 54,
+    Alpha7 = 55,
+    Alpha8 = 56,
+    Alpha9 = 57,
+    Semicolon = 186,
+    Equal = 187,
+    A = 65,
+    B = 66,
+    C = 67,
+    D = 68,
+    E = 69,
+    F = 70,
+    G = 71,
+    H = 72,
+    I = 73,
+    J = 74,
+    K = 75,
+    L = 76,
+    M = 77,
+    N = 78,
+    O = 79,
+    P = 80,
+    Q = 81,
+    R = 82,
+    S = 83,
+    T = 84,
+    U = 85,
+    V = 86,
+    W = 87,
+    X = 88,
+    Y = 89,
+    Z = 90,
+    LeftBracket = 219,
+    Backslash = 220,
+    RightBracket = 221,
+    GraveAccent = 192,
+
+    Escape = 0x1B,
+    Enter = 0x0D,        // VK_RETURN
+    Tab = 0x09,         // VK_TAB
+    Backspace = 0x08,   // VK_BACK
+    Insert = 0x2D,      // VK_INSERT
+    Delete = 0x2E,      // VK_DELETE
+    RightArrow = 0x27,    // VK_RIGHT
+    LeftArrow = 0x25,     // VK_LEFT
+    DownArrow = 0x28,     // VK_DOWN
+    UpArrow = 0x26,       // VK_UP
+    PageUp = 0x21,      // VK_PRIOR
+    PageDown = 0x22,    // VK_NEXT
+    Home = 0x24,        // VK_HOME
+    End = 0x23,         // VK_END
+    CapsLock = 0x14,    // VK_CAPITAL
+    ScrollLock = 0x91,  // VK_SCROLL
+    NumLock = 0x90,     // VK_NUMLOCK
+    PrintScreen = 0x2C, // VK_SNAPSHOT
+    Pause = 0x13,       // VK_PAUSE
+    F1 = 0x70,          // VK_F1
+    F2 = 0x71,
+    F3 = 0x72,
+    F4 = 0x73,
+    F5 = 0x74,
+    F6 = 0x75,
+    F7 = 0x76,
+    F8 = 0x77,
+    F9 = 0x78,
+    F10 = 0x79,
+    F11 = 0x7A,
+    F12 = 0x7B,
+    Numpad0 = 0x60,     // VK_NUMPAD0
+    Numpad1 = 0x61,
+    Numpad2 = 0x62,
+    Numpad3 = 0x63,
+    Numpad4 = 0x64,
+    Numpad5 = 0x65,
+    Numpad6 = 0x66,
+    Numpad7 = 0x67,
+    Numpad8 = 0x68,
+    Numpad9 = 0x69,
+    NumpadDecimal = 0x6E,// VK_DECIMAL
+    NumpadDivide = 0x6F, // VK_DIVIDE
+    NumpadMultiply = 0x6A,// VK_MULTIPLY
+    NumpadSubtract = 0x6D,// VK_SUBTRACT
+    NumpadAdd = 0x6B,    // VK_ADD
+    NumpadEnter = 0x6C,  // VK_SEPARATOR (Often Numpad Enter)
+    LeftShift = 0xA0,   // VK_LSHIFT
+    LeftControl = 0xA2, // VK_LCONTROL
+    LeftAlt = 0xA4,     // VK_LMENU
+    LeftSuper = 0x5B,   // VK_LWIN
+    RightShift = 0xA1,  // VK_RSHIFT
+    RightControl = 0xA3,// VK_RCONTROL
+    RightAlt = 0xA5,    // VK_RMENU
+    RightSuper = 0x5C,  // VK_RWIN
+    Menu = 0x5D         // VK_APPS
+}

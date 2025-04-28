@@ -1,0 +1,11 @@
+Width: 1280
+Height: 720
+MinWidth: 1280
+MinHeight: 720
+MaxWidth: -1
+MaxHeight: -1
+Title: Cheris
+ResizableWindow: true
+AntiAliasing: true
+MainScenePath: Res/Main.yaml
+Backend: Raylib

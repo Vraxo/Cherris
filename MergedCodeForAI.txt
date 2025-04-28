@@ -1,0 +1,5285 @@
+<file path="ApplicationCore.cs">
+using System;
+using System.IO;
+using System.Reflection;
+using System.Threading;
+using YamlDotNet.Serialization;
+
+namespace Cherris;
+
+public sealed class ApplicationCore
+{
+    private static readonly Lazy<ApplicationCore> lazyInstance = new(() => new ApplicationCore());
+    private MainAppWindow? mainWindow;
+    private Configuration? applicationConfig;
+
+    private const string ConfigFilePath = "Res/Cherris/Config.yaml";
+    private const string LogFilePath = "Res/Cherris/Log.txt";
+
+    public static ApplicationCore Instance => lazyInstance.Value;
+
+    private ApplicationCore()
+    {
+    }
+
+    public void Run()
+    {
+        if (!Start())
+        {
+            Log.Error("ApplicationCore failed to start.");
+            return;
+        }
+
+        if (mainWindow is null)
+        {
+            Log.Error("Main window was not initialized.");
+            return;
+        }
+
+        MainLoop();
+
+        Log.Info("Main loop exited. Application exiting.");
+        Cleanup();
+    }
+
+    private bool Start()
+    {
+        CreateLogFile();
+        SetCurrentDirectory();
+
+        applicationConfig = LoadConfig();
+        if (applicationConfig is null)
+        {
+            Log.Error("Failed to load configuration.");
+            return false;
+        }
+
+        try
+        {
+            mainWindow = new MainAppWindow(
+                applicationConfig.Title,
+                applicationConfig.Width,
+                applicationConfig.Height);
+
+            if (!mainWindow.TryCreateWindow())
+            {
+                Log.Error("Failed to create main window.");
+                return false;
+            }
+
+            mainWindow.Closed += OnMainWindowClosed;
+
+            ApplyConfig();
+
+            if (!mainWindow.InitializeWindowAndGraphics())
+            {
+                Log.Error("Failed to initialize window graphics.");
+                return false;
+            }
+
+            mainWindow.ShowWindow();
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Error during window initialization: {ex.Message}");
+            return false;
+        }
+
+
+        return true;
+    }
+
+    private void MainLoop()
+    {
+        while (mainWindow != null && mainWindow.IsOpen)
+        {
+            mainWindow.ProcessMessages();
+
+
+            ClickServer.Instance.Process();
+            SceneTree.Instance.Process();
+
+
+            mainWindow.RenderFrame();
+
+
+            Input.Update();
+
+        }
+    }
+
+    private void OnMainWindowClosed()
+    {
+
+        Log.Info("Main window closed signal received.");
+    }
+
+    private void Cleanup()
+    {
+        mainWindow?.Dispose();
+        mainWindow = null;
+    }
+
+    private void SetRootNodeFromConfig(string scenePath)
+    {
+        if (string.IsNullOrEmpty(scenePath))
+        {
+            Log.Warning("MainScenePath is not defined in the configuration.");
+            return;
+        }
+
+        try
+        {
+            var packedScene = new PackedScene(scenePath);
+            SceneTree.Instance.RootNode = packedScene.Instantiate<Node>();
+            Log.Info($"Loaded main scene: {scenePath}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Failed to load main scene '{scenePath}': {ex.Message}");
+            SceneTree.Instance.RootNode = new Node { Name = "ErrorRoot" };
+        }
+    }
+
+    private static void CreateLogFile()
+    {
+        try
+        {
+            string? logDirectory = Path.GetDirectoryName(LogFilePath);
+            if (!string.IsNullOrEmpty(logDirectory) && !Directory.Exists(logDirectory))
+            {
+                Directory.CreateDirectory(logDirectory);
+            }
+
+            if (File.Exists(LogFilePath))
+            {
+                File.Delete(LogFilePath);
+            }
+
+            using (File.Create(LogFilePath)) { }
+            Log.Info($"Log file created at {Path.GetFullPath(LogFilePath)}");
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[FATAL] Failed to create log file: {ex.Message}");
+            Console.ResetColor();
+        }
+    }
+
+    private static void SetCurrentDirectory()
+    {
+        try
+        {
+            string? assemblyLocation = Assembly.GetEntryAssembly()?.Location;
+            if (string.IsNullOrEmpty(assemblyLocation))
+            {
+                Log.Warning("Could not get assembly location.");
+                return;
+            }
+
+            string? directoryName = Path.GetDirectoryName(assemblyLocation);
+            if (string.IsNullOrEmpty(directoryName))
+            {
+                Log.Warning($"Could not get directory name from assembly location: {assemblyLocation}");
+                return;
+            }
+
+            Environment.CurrentDirectory = directoryName;
+            Log.Info($"Current directory set to: {directoryName}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Failed to set current directory: {ex.Message}");
+        }
+    }
+
+    private Configuration? LoadConfig()
+    {
+        if (!File.Exists(ConfigFilePath))
+        {
+            Log.Error($"Configuration file not found: {ConfigFilePath}");
+            return null;
+        }
+
+        try
+        {
+            var deserializer = new DeserializerBuilder().Build();
+            string yaml = File.ReadAllText(ConfigFilePath);
+            var config = deserializer.Deserialize<Configuration>(yaml);
+            Log.Info("Configuration loaded successfully.");
+            return config;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Failed to load or parse configuration file '{ConfigFilePath}': {ex.Message}");
+            return null;
+        }
+    }
+
+    private void ApplyConfig()
+    {
+        if (applicationConfig is null)
+        {
+            Log.Error("Cannot apply configuration because it was not loaded.");
+            return;
+        }
+
+
+        SetRootNodeFromConfig(applicationConfig.MainScenePath);
+    }
+}
+</file>
+
+<file path="BoxStyle.cs">
+// MODIFIED: Styles/BoxStyle.cs
+// Summary: Replaced BorderThickness with BorderLengthTop, BorderLengthRight, BorderLengthBottom, BorderLengthLeft. Added convenience setter BorderLength.
+using Vortice.Mathematics;
+
+namespace Cherris;
+
+public class BoxStyle
+{
+    public float Roundness { get; set; } = 0.2f;
+    public Color4 FillColor { get; set; } = DefaultTheme.NormalFill;
+    public Color4 BorderColor { get; set; } = DefaultTheme.NormalBorder;
+
+    public float BorderLengthTop { get; set; } = 1.0f;
+    public float BorderLengthRight { get; set; } = 1.0f;
+    public float BorderLengthBottom { get; set; } = 1.0f;
+    public float BorderLengthLeft { get; set; } = 1.0f;
+
+    public float BorderLength
+    {
+        set
+        {
+            BorderLengthTop = value;
+            BorderLengthRight = value;
+            BorderLengthBottom = value;
+            BorderLengthLeft = value;
+        }
+    }
+}
+</file>
+
+<file path="Button.cs">
+using System;
+using System.Numerics;
+using Vortice.Mathematics;
+using D2D = Vortice.Direct2D1;
+using DW = Vortice.DirectWrite;
+
+namespace Cherris;
+
+public class Button : Control
+{
+    public enum ActionMode { Release, Press }
+    public enum ClickBehavior { Left, Right, Both }
+
+    private bool pressedLeft = false;
+    private bool pressedRight = false;
+    private bool wasHovered = false;
+    private string displayedText = "";
+    private string _text = "";
+
+    public Vector2 TextOffset { get; set; } = Vector2.Zero;
+    public HAlignment TextHAlignment { get; set; } = HAlignment.Center;
+    public VAlignment TextVAlignment { get; set; } = VAlignment.Center;
+    public ButtonStylePack Themes { get; set; } = new();
+    public float AvailableWidth { get; set; } = 0;
+    public ActionMode LeftClickActionMode { get; set; } = ActionMode.Release;
+    public ActionMode RightClickActionMode { get; set; } = ActionMode.Release;
+    public bool StayPressed { get; set; } = false;
+    public bool ClipText { get; set; } = false;
+    public bool AutoWidth { get; set; } = false;
+    public Vector2 TextMargin { get; set; } = new(10, 5);
+    public string Ellipsis { get; set; } = "...";
+    public ClickBehavior Behavior { get; set; } = ClickBehavior.Left;
+    public Texture? Icon { get; set; } = null;
+    public float IconMargin { get; set; } = 12;
+    public Sound? ClickSound { get; set; }
+    public Sound? HoverSound { get; set; }
+
+    public string Text
+    {
+        get => _text;
+        set
+        {
+            if (_text == value) return;
+            _text = value;
+            displayedText = value;
+
+        }
+    }
+
+    public event Action<Button>? LeftClicked;
+    public event Action<Button>? RightClicked;
+    public event Action<Button>? MouseEntered;
+    public event Action<Button>? MouseExited;
+
+    public Button()
+    {
+        Size = new(100, 26);
+        Offset = Vector2.Zero;
+        OriginPreset = OriginPreset.None;
+
+        WasDisabled += (button) => Themes.Current = Disabled ? Themes.Disabled : Themes.Normal;
+    }
+
+    public override void Process()
+    {
+        base.Process();
+
+        if (Disabled)
+        {
+            return;
+        }
+
+
+        HandleClicks();
+        HandleKeyboardInput();
+
+    }
+
+    protected virtual void OnEnterPressed() { }
+
+    private void HandleKeyboardInput()
+    {
+        if (!Focused || !Input.IsKeyPressed(KeyCode.Enter))
+        {
+            return;
+        }
+
+        bool invoked = false;
+        if (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both)
+        {
+            LeftClicked?.Invoke(this);
+            invoked = true;
+        }
+
+        if (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both)
+        {
+            RightClicked?.Invoke(this);
+            invoked = true;
+        }
+
+        if (invoked)
+        {
+            ClickSound?.Play(AudioBus);
+            OnEnterPressed();
+        }
+    }
+
+    private void HandleClicks()
+    {
+        bool isMouseOver = IsMouseOver();
+        bool leftClickInvoked = false;
+        bool rightClickInvoked = false;
+
+
+        if (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both)
+        {
+            leftClickInvoked = HandleSingleClick(ref pressedLeft, MouseButtonCode.Left, LeftClickActionMode, LeftClicked);
+        }
+
+        if (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both)
+        {
+            rightClickInvoked = HandleSingleClick(ref pressedRight, MouseButtonCode.Right, RightClickActionMode, RightClicked);
+        }
+
+        HandleHover(isMouseOver);
+
+        UpdateTheme(isMouseOver, pressedLeft || pressedRight);
+    }
+
+    private bool HandleSingleClick(ref bool pressedState, MouseButtonCode button, ActionMode mode, Action<Button>? handler)
+    {
+        bool invoked = false;
+        bool mouseOver = IsMouseOver();
+        bool buttonPressedThisFrame = Input.IsMouseButtonPressed(button);
+        bool buttonReleasedThisFrame = Input.IsMouseButtonReleased(button);
+
+
+        if (mouseOver && buttonPressedThisFrame && !Disabled)
+        {
+            pressedState = true;
+            HandleClickFocus();
+
+            if (mode == ActionMode.Press)
+            {
+                handler?.Invoke(this);
+                ClickSound?.Play(AudioBus);
+                invoked = true;
+            }
+        }
+
+
+        if (buttonReleasedThisFrame)
+        {
+            if (pressedState)
+            {
+                if (!Disabled && mouseOver && mode == ActionMode.Release)
+                {
+                    handler?.Invoke(this);
+                    ClickSound?.Play(AudioBus);
+                    invoked = true;
+                }
+
+                pressedState = false;
+            }
+        }
+
+
+        return invoked;
+    }
+
+
+    private void HandleHover(bool isMouseOver)
+    {
+        if (Disabled)
+        {
+            if (wasHovered)
+            {
+                wasHovered = false;
+                MouseExited?.Invoke(this);
+            }
+            return;
+        }
+
+        if (isMouseOver)
+        {
+            if (!wasHovered)
+            {
+                MouseEntered?.Invoke(this);
+                HoverSound?.Play(AudioBus);
+                wasHovered = true;
+            }
+        }
+        else
+        {
+            if (wasHovered)
+            {
+                wasHovered = false;
+                MouseExited?.Invoke(this);
+            }
+        }
+    }
+
+    private void UpdateTheme(bool isMouseOver, bool isPressedForStayPressed)
+    {
+        if (Disabled)
+        {
+            Themes.Current = Themes.Disabled;
+            return;
+        }
+
+        bool isLeftDown = (Behavior == ClickBehavior.Left || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Left);
+        bool isRightDown = (Behavior == ClickBehavior.Right || Behavior == ClickBehavior.Both) && Input.IsMouseButtonDown(MouseButtonCode.Right);
+        bool isPhysicallyHeldDown = isMouseOver && (isLeftDown || isRightDown);
+
+
+        if (isPressedForStayPressed && StayPressed)
+        {
+            Themes.Current = Themes.Pressed;
+        }
+        else if (isPhysicallyHeldDown)
+        {
+            Themes.Current = Themes.Pressed;
+        }
+        else if (Focused)
+        {
+            Themes.Current = isMouseOver ? Themes.Hover : Themes.Focused;
+        }
+        else if (isMouseOver)
+        {
+            Themes.Current = Themes.Hover;
+        }
+        else
+        {
+            Themes.Current = Themes.Normal;
+        }
+    }
+
+    protected override void OnThemeFileChanged(string themeFile)
+    {
+
+        Log.Warning($"OnThemeFileChanged not fully implemented for Button: {themeFile}");
+    }
+
+
+    public override void Draw(DrawingContext context)
+    {
+        if (!Visible) return;
+
+        DrawBackground(context);
+
+        DrawText(context);
+    }
+
+    private void DrawBackground(DrawingContext context)
+    {
+        var position = GlobalPosition - Origin;
+        var size = ScaledSize;
+        var bounds = new Rect(position.X, position.Y, size.X, size.Y);
+
+        DrawStyledRectangle(context, bounds, Themes.Current);
+    }
+
+    private void DrawIcon(DrawingContext context)
+    {
+        if (Icon is null || context.RenderTarget is null)
+        {
+            return;
+        }
+
+
+        Log.Warning("DrawIcon is not implemented.");
+    }
+
+    private void DrawText(DrawingContext context)
+    {
+        if (Themes.Current is null) return;
+
+        var position = GlobalPosition - Origin;
+        var size = ScaledSize;
+
+
+        var textLayoutRect = new Rect(
+            position.X + TextMargin.X + TextOffset.X,
+            position.Y + TextMargin.Y + TextOffset.Y,
+            Math.Max(0, size.X - TextMargin.X * 2),
+            Math.Max(0, size.Y - TextMargin.Y * 2)
+        );
+
+
+        DrawFormattedText(
+            context,
+            displayedText,
+            textLayoutRect,
+            Themes.Current,
+            TextHAlignment,
+            TextVAlignment
+        );
+    }
+
+
+    private void ResizeToFitText()
+    {
+        if (!AutoWidth || Themes?.Current is null)
+        {
+            return;
+        }
+
+
+        Log.Warning("ResizeToFitText requires DirectWrite implementation.");
+    }
+
+    private void ClipDisplayedText()
+    {
+        if (!ClipText || string.IsNullOrEmpty(Text) || Themes?.Current is null)
+        {
+            displayedText = Text;
+            return;
+        }
+
+
+        Log.Warning("ClipDisplayedText requires DirectWrite implementation.");
+
+        displayedText = Text;
+    }
+
+    private string GetTextClippedWithEllipsis(string input)
+    {
+
+        if (input.Length > Ellipsis.Length)
+        {
+            return input.Substring(0, input.Length - Ellipsis.Length) + Ellipsis;
+        }
+        return input;
+    }
+}
+</file>
+
+<file path="ButtonStyle.cs">
+// ButtonStyle.cs
+using Vortice.Mathematics;
+using Vortice.DirectWrite; // For Font related enums eventually
+
+namespace Cherris;
+
+public class ButtonStyle : BoxStyle
+{
+    // DirectWrite Font properties will be managed elsewhere (e.g., IDWriteTextFormat)
+    // public float FontSpacing { get; set; } = 0; // Handled by TextFormat
+    // public float FontSize { get; set; } = 16; // Handled by TextFormat
+    public Font? Font { get; set; } = null; // Represented by TextFormat
+    public Color4 FontColor { get; set; } = DefaultTheme.Text;
+
+    // Properties needed for creating IDWriteTextFormat
+    public string FontName { get; set; } = "Segoe UI";
+    public float FontSize { get; set; } = 16.0f;
+    public FontWeight FontWeight { get; set; } = FontWeight.Normal;
+    public FontStyle FontStyle { get; set; } = FontStyle.Normal;
+    public FontStretch FontStretch { get; set; } = FontStretch.Normal;
+}
+</file>
+
+<file path="ButtonStylePack.cs">
+namespace Cherris;
+
+public sealed class ButtonStylePack
+{
+    public ButtonStyle Current { get; set; } = new();
+    public ButtonStyle Normal { get; set; } = new();
+    public ButtonStyle Hover { get; set; } = new();
+    public ButtonStyle Pressed { get; set; } = new();
+    public ButtonStyle Disabled { get; set; } = new();
+    public ButtonStyle Focused { get; set; } = new();
+
+    private IEnumerable<ButtonStyle> AllStyles => [Current, Normal, Hover, Pressed, Disabled, Focused];
+
+    public ButtonStylePack()
+    {
+        Hover.FillColor = DefaultTheme.HoverFill;
+
+        Pressed.FillColor = DefaultTheme.Accent;
+
+        Disabled.FillColor = DefaultTheme.DisabledFill;
+        Disabled.BorderColor = DefaultTheme.DisabledBorder;
+        Disabled.FontColor = DefaultTheme.DisabledText;
+
+        Focused.BorderColor = DefaultTheme.FocusBorder;
+        Focused.BorderLength = 1;
+    }
+
+    public float FontSize
+    {
+        get;
+        set
+        {
+            field = value;
+            SetAll(s => s.FontSize = value);
+        }
+    } = 0;
+
+    public Font Font
+    {
+        set => SetAll(s => s.Font = value);
+    }
+
+    public Color FontColor
+    {
+        set => SetAll(s => s.FontColor = value);
+    }
+
+    public float Roundness
+    {
+        set => SetAll(s => s.Roundness = value);
+    }
+
+    public float BorderLength
+    {
+        set => SetAll(s => s.BorderLength = value);
+    }
+
+    public Color FillColor
+    {
+        set => SetAll(s => s.FillColor = value);
+    }
+
+    public Color BorderColor
+    {
+        set => SetAll(s => s.BorderColor = value);
+    }
+
+    public float BorderLengthTop
+    {
+        set => SetAll(s => s.BorderLengthTop = value);
+    }
+
+    public float BorderLengthBottom
+    {
+        set => SetAll(s => s.BorderLengthBottom = value);
+    }
+
+    private void SetAll(Action<ButtonStyle> setter)
+    {
+        foreach (ButtonStyle style in AllStyles)
+        {
+            setter(style);
+        }
+    }
+}
+</file>
+
+<file path="Camera.cs">
+using Raylib_cs;
+
+namespace Cherris;
+
+public class Camera : Node2D
+{
+    public float Zoom { get; set; } = 1;
+
+    public void SetAsActive()
+    {
+        RenderCore.Instance.SetCamera(this);
+    }
+
+    public static implicit operator Camera2D(Camera camera)
+    {
+        return new()
+        {
+            Target = camera.GlobalPosition,
+            Offset = DisplayServer.WindowSize / 2,
+            Zoom = camera.Zoom,
+        };
+    }
+}
+</file>
+
+<file path="Clickable.cs">
+namespace Cherris;
+
+public abstract class Clickable : Node2D
+{
+    public bool OnTopLeft = false;
+    public bool OnTopRight = false;
+
+    public Clickable()
+    {
+        ClickServer.Instance.Register(this);
+    }
+
+    public override void Free()
+    {
+        ClickServer.Instance.Unregister(this);
+        base.Free();
+    }
+
+    public abstract bool IsMouseOver();
+}
+</file>
+
+<file path="ClickableRectangle.cs">
+namespace Cherris;
+
+public abstract class ClickableRectangle : Clickable
+{
+    public override bool IsMouseOver()
+    {
+        Vector2 mousePosition = Input.WorldMousePosition;
+
+        bool isMouseOver =
+            mousePosition.X > GlobalPosition.X - Origin.X &&
+            mousePosition.X < GlobalPosition.X + ScaledSize.X - Origin.X &&
+            mousePosition.Y > GlobalPosition.Y - Origin.Y &&
+            mousePosition.Y < GlobalPosition.Y + ScaledSize.Y - Origin.Y;
+
+        return isMouseOver;
+    }
+}
+</file>
+
+<file path="ClickServer.cs">
+namespace Cherris;
+
+public sealed class ClickServer
+{
+    public static ClickServer Instance { get; } = new();
+
+    public int MinLayer = -1;
+
+    private readonly List<Clickable> clickables = [];
+    private const bool Debug = false;
+
+    private ClickServer() { }
+
+    public void Register(Clickable clickable)
+    {
+        clickables.Add(clickable);
+    }
+
+    public void Unregister(Clickable clickable)
+    {
+        clickables.Remove(clickable);
+    }
+
+    public void Process()
+    {
+        if (Input.IsMouseButtonPressed(MouseButtonCode.Left))
+        {
+            SignalClick(MouseButtonCode.Left);
+        }
+
+        if (Input.IsMouseButtonPressed(MouseButtonCode.Right))
+        {
+            SignalClick(MouseButtonCode.Right);
+        }
+    }
+
+    public int GetHighestLayer()
+    {
+        int highestLayer = MinLayer;
+
+        foreach (Clickable clickable in clickables)
+        {
+            if (clickable.Layer <= highestLayer)
+            {
+                continue;
+            }
+
+            highestLayer = clickable.Layer;
+        }
+
+        return highestLayer;
+    }
+
+    private void SignalClick(MouseButtonCode mouseButton)
+    {
+        List<Clickable> viableClickables = GetViableClickables();
+
+        if (viableClickables.Count <= 0)
+        {
+            return;
+        }
+
+        Clickable? topClickable = GetTopClickable(viableClickables);
+
+        if (topClickable is null)
+        {
+            return;
+        }
+
+        if (mouseButton == MouseButtonCode.Left)
+        {
+            topClickable.OnTopLeft = true;
+            Log.Info($"'{topClickable.Name}' has been left clicked.", Debug);
+        }
+        else
+        {
+            topClickable.OnTopRight = true;
+            Log.Info($"'{topClickable.Name}' has been right clicked.", Debug);
+        }
+    }
+
+    private List<Clickable> GetViableClickables()
+    {
+        List<Clickable> viableClickables = [];
+
+        foreach (Clickable clickable in clickables)
+        {
+            if (!IsMouseOverNode2D(clickable))
+            {
+                continue;
+            }
+
+            viableClickables.Add(clickable);
+        }
+
+        Log.Info($"{viableClickables.Count} viable clickables.", Debug);
+
+        return viableClickables;
+    }
+
+    private Clickable? GetTopClickable(List<Clickable> viableClickables)
+    {
+        Clickable? topClickable = null;
+        int highestLayer = MinLayer;
+
+        foreach (Clickable clickable in viableClickables)
+        {
+            if (clickable.Layer < highestLayer)
+            {
+                continue;
+            }
+
+            highestLayer = clickable.Layer;
+            topClickable = clickable;
+        }
+
+        Log.Info($"The highest layer is {viableClickables.Count}.", Debug);
+
+        return topClickable;
+    }
+
+    private static bool IsMouseOverNode2D(Node2D node)
+    {
+        Vector2 mousePosition = Input.WorldMousePosition;
+
+        bool isMouseOver =
+            mousePosition.X > node.GlobalPosition.X - node.Origin.X &&
+            mousePosition.X < node.GlobalPosition.X + node.ScaledSize.X - node.Origin.X &&
+            mousePosition.Y > node.GlobalPosition.Y - node.Origin.Y &&
+            mousePosition.Y < node.GlobalPosition.Y + node.ScaledSize.Y - node.Origin.Y;
+
+        return isMouseOver;
+    }
+}
+</file>
+
+<file path="Configuration.cs">
+namespace Cherris;
+
+public class Configuration
+{
+    public int Width { get; set; } = 0;
+    public int Height { get; set; } = 0;
+    public int MinWidth { get; set; } = 0;
+    public int MinHeight { get; set; } = 0;
+    public int MaxWidth { get; set; } = 0;
+    public int MaxHeight { get; set; } = 0;
+    public string Title { get; set; } = "Cherris";
+    public bool ResizableWindow { get; set; } = true;
+    public bool AntiAliasing { get; set; } = true;
+    public string MainScenePath { get; set; } = "";
+    public string Backend { get; set; } = "Raylib";
+}
+</file>
+
+<file path="Control.cs">
+namespace Cherris;
+
+public class Control : ClickableRectangle
+{
+    public bool Focusable { get; set; } = true;
+    public bool Navigable { get; set; } = true;
+    public bool RapidNavigation { get; set; } = true;
+    public string? FocusNeighborTop { get; set; }
+    public string? FocusNeighborBottom { get; set; }
+    public string? FocusNeighborLeft { get; set; }
+    public string? FocusNeighborRight { get; set; }
+    public string? FocusNeighborNext { get; set; }
+    public string? FocusNeighborPrevious { get; set; }
+    public string AudioBus { get; set; } = "Master";
+    public Sound? FocusGainedSound { get; set; }
+
+    private bool wasFocusedLastFrame = false;
+    private readonly Dictionary<string, float> actionHoldTimes = [];
+    private const float InitialDelay = 0.5f;
+    private const float RepeatInterval = 0.1f;
+
+    public bool Disabled
+    {
+        get;
+        set
+        {
+            if (value == field)
+            {
+                return;
+            }
+
+            field = value;
+            WasDisabled?.Invoke(this);
+        }
+    } = false;
+
+    public bool Focused
+    {
+        get;
+        set
+        {
+            if (field == value)
+            {
+                return;
+            }
+            field = value;
+            FocusChanged?.Invoke(this);
+
+            if (field)
+            {
+                FocusGained?.Invoke(this);
+
+                if (FocusGainedSound is not null)
+                {
+                    FocusGainedSound?.Play(AudioBus);
+                }
+            }
+        }
+    } = false;
+
+    public string ThemeFile
+    {
+        set
+        {
+            OnThemeFileChanged(value);
+        }
+    }
+
+    // Events
+
+    public delegate void Event(Control control);
+    public event Event? FocusChanged;
+    public event Event? FocusGained;
+    public event Event? WasDisabled;
+    public event Event? ClickedOutside;
+
+    // Main
+
+    public override void Process()
+    {
+        base.Process();
+
+        if (Navigable && Focused && wasFocusedLastFrame)
+        {
+            HandleArrowNavigation();
+        }
+
+        UpdateFocusOnOutsideClicked();
+        wasFocusedLastFrame = Focused;
+    }
+
+    // Navigation
+
+    private void HandleArrowNavigation()
+    {
+        var actions = new (string Action, string? Path)[]
+        {
+            ("UiLeft", FocusNeighborLeft),
+            ("UiUp", FocusNeighborTop),
+            ("UiRight", FocusNeighborRight),
+            ("UiDown", FocusNeighborBottom),
+            ("UiNext", FocusNeighborNext),
+            ("UiPrevious", FocusNeighborPrevious)
+        };
+
+        foreach (var entry in actions)
+        {
+            if (string.IsNullOrEmpty(entry.Path)) continue;
+
+            if (RapidNavigation)
+            {
+                if (Input.IsActionDown(entry.Action))
+                {
+                    if (!actionHoldTimes.ContainsKey(entry.Action))
+                    {
+                        actionHoldTimes[entry.Action] = 0f;
+                    }
+
+                    actionHoldTimes[entry.Action] += Time.Delta;
+                    float holdTime = actionHoldTimes[entry.Action];
+
+                    bool shouldNavigate = (holdTime <= Time.Delta + float.Epsilon) ||
+                        (holdTime >= InitialDelay && (holdTime - InitialDelay) % RepeatInterval < Time.Delta);
+
+                    if (shouldNavigate)
+                    {
+                        NavigateToControl(entry.Path, entry.Action, holdTime);
+                    }
+                }
+                else
+                {
+                    actionHoldTimes[entry.Action] = 0f;
+                }
+            }
+            else
+            {
+                if (Input.IsActionPressed(entry.Action))
+                {
+                    NavigateToControl(entry.Path, entry.Action, 0f);
+                }
+            }
+        }
+    }
+
+    private void NavigateToControl(string controlPath, string action, float holdTime)
+    {
+        var neighbor = GetNodeOrNull<Control>(controlPath);
+
+        if (neighbor is null)
+        {
+            Log.Error($"[Control] [{Name}] NavigateToControl: Could not find '{controlPath}'.");
+            return;
+        }
+
+        if (neighbor.Disabled)
+        {
+            return;
+        }
+
+        if (RapidNavigation)
+        {
+            neighbor.actionHoldTimes[action] = holdTime;
+        }
+
+        neighbor.Focused = true;
+        Focused = false;
+    }
+
+    // Focus
+
+    private void UpdateFocusOnOutsideClicked()
+    {
+        if (!IsMouseOver() && Input.IsMouseButtonPressed(MouseButtonCode.Left))
+        {
+            Focused = false;
+            ClickedOutside?.Invoke(this);
+        }
+    }
+
+    protected virtual void HandleClickFocus()
+    {
+        if (Focusable && IsMouseOver())
+        {
+            Focused = true;
+        }
+    }
+
+    // Other
+
+    protected virtual void OnThemeFileChanged(string themeFile) { }
+}
+</file>
+
+<file path="DefaultTheme.cs">
+// DefaultTheme.cs
+using Vortice.Mathematics;
+
+namespace Cherris;
+
+// Defines default colors for the UI theme
+public static class DefaultTheme
+{
+    // Basic Palette
+    public static readonly Color4 White = Colors.White;
+    public static readonly Color4 Black = Colors.Black;
+    public static readonly Color4 Transparent = Colors.Transparent;
+
+    // UI Element Colors (Examples, adjust as needed)
+    public static readonly Color4 NormalFill = new Color4(0.25f, 0.25f, 0.3f, 1.0f);
+    public static readonly Color4 NormalBorder = new Color4(0.4f, 0.4f, 0.45f, 1.0f);
+
+    public static readonly Color4 HoverFill = new Color4(0.35f, 0.35f, 0.4f, 1.0f);
+    public static readonly Color4 HoverBorder = new Color4(0.5f, 0.5f, 0.55f, 1.0f);
+
+    public static readonly Color4 Accent = new Color4(0.2f, 0.4f, 0.8f, 1.0f); // Used for Pressed Fill
+    public static readonly Color4 AccentBorder = new Color4(0.3f, 0.5f, 0.9f, 1.0f); // Used for Pressed Border
+
+    public static readonly Color4 DisabledFill = new Color4(0.2f, 0.2f, 0.2f, 0.8f);
+    public static readonly Color4 DisabledBorder = new Color4(0.3f, 0.3f, 0.3f, 0.8f);
+    public static readonly Color4 DisabledText = new Color4(0.5f, 0.5f, 0.5f, 1.0f);
+
+    public static readonly Color4 FocusBorder = Colors.LightSkyBlue; // Example focus color
+
+    public static readonly Color4 Text = Colors.WhiteSmoke;
+}
+</file>
+
+<file path="Direct2DAppWindow.cs">
+using System;
+using System.Numerics;
+using System.Diagnostics;
+
+using Vortice;
+using Vortice.Mathematics;
+
+using Vortice.Direct2D1;
+using Vortice.DirectWrite;
+using Vortice.DXGI;
+using SharpGen.Runtime;
+
+using D2D = Vortice.Direct2D1;
+using DW = Vortice.DirectWrite;
+
+using D2DFactoryType = Vortice.Direct2D1.FactoryType;
+using SizeI = Vortice.Mathematics.SizeI;
+using Rect = Vortice.Mathematics.Rect;
+
+using Vortice.DCommon;
+
+namespace Cherris;
+
+public abstract class Direct2DAppWindow : Win32Window
+{
+    protected ID2D1Factory1? d2dFactory;
+    protected IDWriteFactory? dwriteFactory;
+    protected ID2D1HwndRenderTarget? renderTarget;
+
+    protected Color4 backgroundColor = new(0.1f, 0.1f, 0.15f, 1.0f);
+    protected bool graphicsInitialized = false;
+
+    private Stopwatch fpsTimer = new();
+    private long lastFpsUpdateTimeTicks = 0;
+    private int frameCountSinceUpdate = 0;
+    private float currentFps = 0.0f;
+    private const long FpsUpdateIntervalTicks = TimeSpan.TicksPerSecond / 2;
+    private ID2D1SolidColorBrush? fpsTextBrush;
+    private IDWriteTextFormat? fpsTextFormat;
+    private readonly Color4 fpsTextColor = DefaultTheme.Text;
+    private readonly string fpsFontName = "Consolas";
+    private readonly float fpsFontSize = 14.0f;
+
+    public Direct2DAppWindow(string title = "Vortice DirectUI Base Window", int width = 800, int height = 600)
+        : base(title, width, height)
+    { }
+
+    protected override bool Initialize()
+    {
+        Log.Info("Direct2DAppWindow initializing Vortice Graphics...");
+
+        return InitializeGraphics();
+    }
+
+    protected override void Cleanup()
+    {
+        Log.Info("Direct2DAppWindow cleaning up its resources...");
+
+        CleanupGraphics();
+    }
+
+    public override void RenderFrame()
+    {
+        if (!fpsTimer.IsRunning)
+        {
+            fpsTimer.Start();
+            lastFpsUpdateTimeTicks = fpsTimer.ElapsedTicks;
+            frameCountSinceUpdate = 0;
+        }
+
+        frameCountSinceUpdate++;
+        long elapsedTicks = fpsTimer.ElapsedTicks;
+        long timeSinceLastUpdate = elapsedTicks - lastFpsUpdateTimeTicks;
+
+        if (timeSinceLastUpdate >= FpsUpdateIntervalTicks)
+        {
+            float secondsElapsed = (float)timeSinceLastUpdate / TimeSpan.TicksPerSecond;
+            currentFps = (secondsElapsed > 0.001f) ? (frameCountSinceUpdate / secondsElapsed) : 0.0f;
+            frameCountSinceUpdate = 0;
+            lastFpsUpdateTimeTicks = elapsedTicks;
+        }
+
+        if (!graphicsInitialized || renderTarget is null || dwriteFactory is null)
+        {
+            if (!graphicsInitialized && Handle != nint.Zero && IsOpen)
+            {
+                Log.Warning("Graphics not initialized in RenderFrame, attempting reinitialization.");
+                InitializeGraphics();
+                if (!graphicsInitialized || renderTarget is null || dwriteFactory is null)
+                {
+                    Log.Error("Reinitialization failed in RenderFrame.");
+                    return;
+                }
+            }
+            else
+            {
+                Log.Warning("RenderFrame skipped: Graphics not ready or window closed.");
+                return;
+            }
+        }
+
+        try
+        {
+            renderTarget.BeginDraw();
+            renderTarget.Clear(backgroundColor);
+
+            var drawingContext = new DrawingContext(renderTarget, dwriteFactory);
+
+            DrawUIContent(drawingContext);
+
+
+            if (fpsTextBrush is not null && fpsTextFormat is not null)
+            {
+                string fpsText = $"FPS: {currentFps:F1}";
+                Rect fpsLayoutRect = new Rect(5f, 5f, 150f, 30f);
+                renderTarget.DrawText(fpsText, fpsTextFormat, fpsLayoutRect, fpsTextBrush);
+            }
+
+            Result endDrawResult = renderTarget.EndDraw();
+
+            if (endDrawResult.Failure)
+            {
+                Log.Error($"EndDraw failed: {endDrawResult.Description}");
+                if (endDrawResult.Code == D2D.ResultCode.RecreateTarget.Code)
+                {
+                    Log.Warning("Render target needs recreation (Detected in EndDraw).");
+                    graphicsInitialized = false;
+                    CleanupGraphics();
+                    InitializeGraphics();
+                }
+            }
+        }
+        catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
+        {
+            Log.Error($"Render target needs recreation (Caught SharpGenException in RenderFrame): {ex.Message}");
+            graphicsInitialized = false;
+            CleanupGraphics();
+            InitializeGraphics();
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Rendering Error in RenderFrame: {ex}");
+
+            graphicsInitialized = false;
+            CleanupGraphics();
+            InitializeGraphics();
+        }
+    }
+
+    protected abstract void DrawUIContent(DrawingContext context);
+
+    protected override void OnSize(int width, int height)
+    {
+        if (graphicsInitialized && renderTarget is not null && width > 0 && height > 0)
+        {
+            Log.Info($"Window resized to {width}x{height}. Resizing render target...");
+            try
+            {
+                var newPixelSize = new SizeI(width, height);
+
+
+                CleanupDeviceSpecificResources();
+
+
+                renderTarget.Resize(newPixelSize);
+
+
+                RecreateDeviceSpecificResources();
+
+                Log.Info($"Successfully resized render target.");
+                Invalidate();
+            }
+            catch (SharpGenException ex)
+            {
+                Log.Error($"Failed to resize Render Target (SharpGenException): {ex.Message} HRESULT: {ex.ResultCode}");
+                if (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
+                {
+                    Log.Warning("Render target needs recreation (Detected in Resize Exception).");
+                    graphicsInitialized = false;
+                    CleanupGraphics();
+                    InitializeGraphics();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Failed to resize Render Target (General Exception): {ex}");
+                graphicsInitialized = false;
+                CleanupGraphics();
+                InitializeGraphics();
+            }
+        }
+        else if (!graphicsInitialized && Handle != nint.Zero && IsOpen && width > 0 && height > 0)
+        {
+            Log.Warning("OnSize called but graphics not initialized. Attempting initialization.");
+
+            InitializeGraphics();
+        }
+        else if (width <= 0 || height <= 0)
+        {
+            Log.Warning($"Ignoring OnSize call with invalid dimensions: {width}x{height}");
+        }
+    }
+
+
+    protected override void OnMouseMove(int x, int y) { }
+    protected override void OnMouseDown(MouseButton button, int x, int y) { }
+    protected override void OnMouseUp(MouseButton button, int x, int y) { }
+    protected override void OnKeyDown(int keyCode) { }
+    protected override void OnKeyUp(int keyCode) { }
+    protected override void OnMouseWheel(short delta) { }
+
+
+    protected virtual bool InitializeGraphics()
+    {
+        if (graphicsInitialized) return true;
+        if (Handle == nint.Zero || !IsOpen)
+        {
+            Log.Warning("InitializeGraphics skipped: Invalid handle or window not open.");
+            return false;
+        }
+
+        Log.Info($"Attempting Graphics Initialization for HWND {Handle}...");
+
+        try
+        {
+
+            CleanupGraphics();
+
+
+            Result factoryResult = D2D1.D2D1CreateFactory(D2DFactoryType.SingleThreaded, out d2dFactory);
+            factoryResult.CheckError();
+            if (d2dFactory is null) throw new InvalidOperationException("D2D Factory creation failed silently.");
+
+
+            Result dwriteResult = DWrite.DWriteCreateFactory(DW.FactoryType.Shared, out dwriteFactory);
+            dwriteResult.CheckError();
+            if (dwriteFactory is null) throw new InvalidOperationException("DWrite Factory creation failed silently.");
+
+
+            var clientRectSize = GetClientRectSize();
+            if (clientRectSize.Width <= 0 || clientRectSize.Height <= 0)
+            {
+                Log.Warning($"Invalid client rect size ({clientRectSize.Width}x{clientRectSize.Height}). Aborting graphics initialization.");
+                CleanupGraphics();
+                return false;
+            }
+
+
+            var dxgiPixelFormat = new PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied);
+            var renderTargetProperties = new RenderTargetProperties(dxgiPixelFormat);
+            var hwndRenderTargetProperties = new HwndRenderTargetProperties
+            {
+                Hwnd = Handle,
+                PixelSize = new SizeI(clientRectSize.Width, clientRectSize.Height),
+                PresentOptions = PresentOptions.None
+            };
+
+
+            renderTarget = d2dFactory.CreateHwndRenderTarget(renderTargetProperties, hwndRenderTargetProperties);
+            if (renderTarget is null) throw new InvalidOperationException("Render target creation returned null unexpectedly.");
+
+
+            renderTarget.TextAntialiasMode = D2D.TextAntialiasMode.Cleartype;
+
+
+            RecreateDeviceSpecificResources();
+
+
+            frameCountSinceUpdate = 0;
+            currentFps = 0;
+            lastFpsUpdateTimeTicks = 0;
+            fpsTimer.Restart();
+
+            Log.Info($"Vortice Graphics initialized successfully for HWND {Handle}.");
+            graphicsInitialized = true;
+            return true;
+        }
+        catch (SharpGenException ex)
+        {
+            Log.Error($"Graphics Initialization failed (SharpGenException): {ex.Message} HRESULT: {ex.ResultCode}");
+            CleanupGraphics(); graphicsInitialized = false; return false;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Graphics Initialization failed (General Exception): {ex}");
+            CleanupGraphics(); graphicsInitialized = false; return false;
+        }
+    }
+
+    private void RecreateDeviceSpecificResources()
+    {
+        if (renderTarget is null || dwriteFactory is null) return;
+
+        try
+        {
+
+            fpsTextFormat = dwriteFactory.CreateTextFormat(fpsFontName, null, FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, fpsFontSize, "en-us");
+            fpsTextFormat.TextAlignment = DW.TextAlignment.Leading;
+            fpsTextFormat.ParagraphAlignment = ParagraphAlignment.Near;
+
+
+            fpsTextBrush = renderTarget.CreateSolidColorBrush(fpsTextColor);
+
+
+            VisualItem.CleanupResources();
+            Log.Info("Recreated FPS and VisualItem drawing resources.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Warning: Failed to recreate device-specific resources: {ex.Message}");
+
+            CleanupDeviceSpecificResources();
+        }
+    }
+
+    private void CleanupDeviceSpecificResources()
+    {
+        fpsTextBrush?.Dispose(); fpsTextBrush = null;
+        fpsTextFormat?.Dispose(); fpsTextFormat = null;
+
+        VisualItem.CleanupResources();
+    }
+
+    protected virtual void CleanupGraphics()
+    {
+        bool resourcesExisted = d2dFactory is not null || renderTarget is not null || dwriteFactory is not null;
+        if (resourcesExisted) Log.Info("Cleaning up Vortice Graphics resources...");
+
+        fpsTimer.Stop();
+
+
+        CleanupDeviceSpecificResources();
+
+
+        renderTarget?.Dispose(); renderTarget = null;
+        dwriteFactory?.Dispose(); dwriteFactory = null;
+        d2dFactory?.Dispose(); d2dFactory = null;
+        graphicsInitialized = false;
+
+        if (resourcesExisted) Log.Info("Finished cleaning graphics resources.");
+    }
+
+    protected SizeI GetClientRectSize()
+    {
+        if (Handle != nint.Zero && NativeMethods.GetClientRect(Handle, out NativeMethods.RECT r))
+        {
+            int width = Math.Max(1, r.right - r.left);
+            int height = Math.Max(1, r.bottom - r.top);
+            return new SizeI(width, height);
+        }
+
+        int baseWidth = Math.Max(1, Width);
+        int baseHeight = Math.Max(1, Height);
+        if (Handle != nint.Zero)
+        {
+            Log.Warning($"GetClientRect failed. Falling back to stored size: {baseWidth}x{baseHeight}");
+        }
+        return new SizeI(baseWidth, baseHeight);
+    }
+}
+</file>
+
+<file path="DisplayServer.cs">
+using Raylib_cs;
+using System;
+
+namespace Cherris;
+
+public sealed class DisplayServer
+{
+    private static DisplayServer? _instance;
+    public static DisplayServer Instance => _instance ??= new();
+
+    public Vector2 OriginalWindowSize = Vector2.Zero;
+    public Vector2 PreviousWindowSize = Vector2.Zero;
+
+    public static Vector2 WindowSize
+    {
+        get => new(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
+
+        set
+        {
+            Raylib.SetWindowSize((int)value.X, (int)value.Y);
+        }
+    }
+
+    public static Vector2 MonitorSize
+    {
+        get
+        {
+            int currentMonitor = Raylib.GetCurrentMonitor();
+            int width = Raylib.GetMonitorWidth(currentMonitor);
+            int height = Raylib.GetMonitorHeight(currentMonitor);
+
+            return new(width, height);
+        }
+    }
+
+    public static bool Fullscreen => Raylib.IsWindowFullscreen();
+
+    // Events
+
+    public event Action<Vector2>? WindowSizeChanged;
+
+    // Public
+
+    public DisplayServer()
+    {
+        PreviousWindowSize = WindowSize;
+    }
+
+    public void Process()
+    {
+        Vector2 currentWindowSize = WindowSize;
+
+        if (currentWindowSize != PreviousWindowSize)
+        {
+            WindowSizeChanged?.Invoke(currentWindowSize);
+            PreviousWindowSize = currentWindowSize;
+        }
+    }
+
+    public static void ToggleFullscreen()
+    {
+        Raylib.ToggleFullscreen();
+    }
+}
+</file>
+
+<file path="DrawingContext.cs">
+// DrawingContext.cs
+using Vortice.Direct2D1;
+using Vortice.DirectWrite;
+
+namespace Cherris;
+
+// Holds rendering resources needed for UI drawing
+public readonly struct DrawingContext
+{
+    public readonly ID2D1HwndRenderTarget RenderTarget;
+    public readonly IDWriteFactory DWriteFactory;
+    // Could potentially add D2DFactory later if needed
+
+    public DrawingContext(ID2D1HwndRenderTarget renderTarget, IDWriteFactory dwriteFactory)
+    {
+        RenderTarget = renderTarget;
+        DWriteFactory = dwriteFactory;
+    }
+}
+</file>
+
+<file path="EntryPoint.cs">
+namespace Cherris;
+
+public class EntryPoint
+{
+    [STAThread]
+    public static void Main(string[] args)
+    {
+        ApplicationCore.Instance.Run();
+    }
+}
+</file>
+
+<file path="FileLoader.cs">
+using Cherris;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
+
+public static class FileLoader
+{
+    private static readonly IDeserializer _deserializer = new DeserializerBuilder()
+        .WithNamingConvention(PascalCaseNamingConvention.Instance)
+        .Build();
+
+    public static T Load<T>(string filePath) where T : new()
+    {
+        var yamlContent = File.ReadAllText(filePath);
+        var data = _deserializer.Deserialize<object>(yamlContent);
+
+        T instance = new();
+        ProcessYamlData(instance, data, "");
+        return instance;
+    }
+
+    private static void ProcessYamlData(object target, object yamlData, string currentPath)
+    {
+        switch (yamlData)
+        {
+            case Dictionary<object, object> dict:
+                foreach (var entry in dict)
+                {
+                    string key = entry.Key.ToString()!;
+                    string newPath = string.IsNullOrEmpty(currentPath) ? key : $"{currentPath}/{key}";
+                    ProcessYamlData(target, entry.Value, newPath);
+                }
+                break;
+            case List<object> list:
+                // Treat lists as values (e.g., for Color, Vector2)
+                PackedSceneUtils.SetNestedMember(target, currentPath, list);
+                break;
+            default:
+                PackedSceneUtils.SetNestedMember(target, currentPath, yamlData);
+                break;
+        }
+    }
+}
+</file>
+
+<file path="GlobalSuppressions.cs">
+// This file is used by Code Analysis to maintain SuppressMessage
+// attributes that are applied to this project.
+// Project-level suppressions either have no target or are given
+// a specific target and scoped to a namespace, type, member, etc.
+
+using System.Diagnostics.CodeAnalysis;
+
+[assembly: SuppressMessage("Style", "IDE0130:Namespace does not match folder structure", Justification = "<Pending>", Scope = "namespace", Target = "~N:Cherris")]
+</file>
+
+<file path="GlobalUsings.cs">
+// Types
+//global using Color = Raylib_cs.Color;
+//global using Image = Raylib_cs.Image;
+//global using Rectangle = Raylib_cs.Rectangle;
+global using Vector2 = System.Numerics.Vector2;
+
+global using Color = Vortice.Mathematics.Color4;
+
+// Resources
+global using Shader = Cherris.Shader;
+global using Font = Cherris.Font;
+
+// Nodes
+//global using Button = Cherris.Button;
+//global using CheckBox = Cherris.CheckBox;
+//global using ProgressBar = Cherris.ProgressBar;
+//global using Timer = Cherris.Timer;
+</file>
+
+<file path="HAlignment.cs">
+namespace Cherris;
+
+public enum OriginPreset
+{
+    None,
+    Center,
+    CenterLeft,
+    CenterRight,
+    TopLeft,
+    TopCenter,
+    TopRight,
+    BottomCenter,
+    BottomLeft,
+    BottomRight,
+}
+
+public enum HAlignment
+{
+    Left,
+    Center,
+    Right,
+    None 
+}
+</file>
+
+<file path="Input.cs">
+// file: Input.cs
+using System.Collections.Generic;
+using System.Numerics;
+using static System.Runtime.CompilerServices.RuntimeHelpers;
+
+namespace Cherris;
+
+public static class Input
+{
+    private static Vector2 _currentMousePosition = Vector2.Zero;
+    private static readonly HashSet<MouseButtonCode> _currentMouseButtonsDown = [];
+    private static readonly HashSet<MouseButtonCode> _previousMouseButtonsDown = [];
+    private static readonly HashSet<KeyCode> _currentKeysDown = [];
+    private static readonly HashSet<KeyCode> _previousKeysDown = [];
+    private static float _mouseWheelMovement = 0f;
+
+    private static readonly Dictionary<string, KeyCode> _positiveXActions = [];
+    private static readonly Dictionary<string, KeyCode> _negativeXActions = [];
+    private static readonly Dictionary<string, KeyCode> _positiveYActions = [];
+    private static readonly Dictionary<string, KeyCode> _negativeYActions = [];
+
+
+    public static void Update()
+    {
+        _previousMouseButtonsDown.Clear();
+        foreach (var button in _currentMouseButtonsDown)
+        {
+            _previousMouseButtonsDown.Add(button);
+        }
+
+        _previousKeysDown.Clear();
+        foreach (var key in _currentKeysDown)
+        {
+            _previousKeysDown.Add(key);
+        }
+
+        _mouseWheelMovement = 0f;
+    }
+
+    internal static void UpdateMouseButton(MouseButtonCode button, bool isDown)
+    {
+        if (isDown)
+        {
+            _currentMouseButtonsDown.Add(button);
+        }
+        else
+        {
+            _currentMouseButtonsDown.Remove(button);
+        }
+    }
+
+    internal static void UpdateKey(KeyCode key, bool isDown)
+    {
+        if (isDown)
+        {
+            _currentKeysDown.Add(key);
+        }
+        else
+        {
+            _currentKeysDown.Remove(key);
+        }
+    }
+
+    internal static void UpdateMousePosition(Vector2 position)
+    {
+        _currentMousePosition = position;
+    }
+
+    internal static void UpdateMouseWheel(float delta)
+    {
+        _mouseWheelMovement = delta;
+    }
+
+
+    public static bool IsActionDown(string actionName)
+    {
+        if (_positiveXActions.TryGetValue(actionName, out var posXKey) && IsKeyDown(posXKey)) return true;
+        if (_negativeXActions.TryGetValue(actionName, out var negXKey) && IsKeyDown(negXKey)) return true;
+        if (_positiveYActions.TryGetValue(actionName, out var posYKey) && IsKeyDown(posYKey)) return true;
+        if (_negativeYActions.TryGetValue(actionName, out var negYKey) && IsKeyDown(negYKey)) return true;
+
+        return false;
+    }
+
+    public static bool IsActionPressed(string actionName)
+    {
+        if (_positiveXActions.TryGetValue(actionName, out var posXKey) && IsKeyPressed(posXKey)) return true;
+        if (_negativeXActions.TryGetValue(actionName, out var negXKey) && IsKeyPressed(negXKey)) return true;
+        if (_positiveYActions.TryGetValue(actionName, out var posYKey) && IsKeyPressed(posYKey)) return true;
+        if (_negativeYActions.TryGetValue(actionName, out var negYKey) && IsKeyPressed(negYKey)) return true;
+        return false;
+    }
+
+
+    public static bool IsKeyPressed(KeyCode keyboardKey)
+    {
+        return _currentKeysDown.Contains(keyboardKey) && !_previousKeysDown.Contains(keyboardKey);
+    }
+
+    public static bool IsKeyReleased(KeyCode keyboardKey)
+    {
+        return !_currentKeysDown.Contains(keyboardKey) && _previousKeysDown.Contains(keyboardKey);
+    }
+
+    public static bool IsKeyDown(KeyCode keyboardKey)
+    {
+        return _currentKeysDown.Contains(keyboardKey);
+    }
+
+
+    public static bool IsMouseButtonPressed(MouseButtonCode button)
+    {
+        return _currentMouseButtonsDown.Contains(button) && !_previousMouseButtonsDown.Contains(button);
+    }
+
+    public static bool IsMouseButtonReleased(MouseButtonCode button)
+    {
+        return !_currentMouseButtonsDown.Contains(button) && _previousMouseButtonsDown.Contains(button);
+    }
+
+    public static bool IsMouseButtonDown(MouseButtonCode button)
+    {
+        return _currentMouseButtonsDown.Contains(button);
+    }
+
+    public static float GetMouseWheelMovement()
+    {
+        return _mouseWheelMovement;
+    }
+
+    public static Vector2 MousePosition => _currentMousePosition;
+
+    public static Vector2 WorldMousePosition => _currentMousePosition;
+
+    //public static MouseCursorCode Cursor
+    //{
+    //
+    //    set { }
+    //}
+
+    public static Vector2 GetVector(string negativeX, string positiveX, string negativeY, string positiveY, float deadzone = -1.0f)
+    {
+        float x = 0.0f;
+        float y = 0.0f;
+
+        if (_positiveXActions.TryGetValue(positiveX, out var posXKey) && IsKeyDown(posXKey)) x += 1.0f;
+        if (_negativeXActions.TryGetValue(negativeX, out var negXKey) && IsKeyDown(negXKey)) x -= 1.0f;
+        if (_positiveYActions.TryGetValue(positiveY, out var posYKey) && IsKeyDown(posYKey)) y += 1.0f;
+        if (_negativeYActions.TryGetValue(negativeY, out var negYKey) && IsKeyDown(negYKey)) y -= 1.0f;
+
+        var vector = new Vector2(x, y);
+
+        if (deadzone < 0.0f)
+        {
+            return vector.LengthSquared() > 0 ? Vector2.Normalize(vector) : Vector2.Zero;
+        }
+        else
+        {
+            float length = vector.Length();
+            if (length < deadzone)
+            {
+                return Vector2.Zero;
+            }
+            else
+            {
+                var normalized = vector / length;
+                float mappedLength = (length - deadzone) / (1.0f - deadzone);
+                return normalized * mappedLength;
+            }
+        }
+    }
+
+    public static void AddActionKey(string actionName, KeyCode key, bool isPositiveX = false, bool isNegativeX = false, bool isPositiveY = false, bool isNegativeY = false)
+    {
+        if (isPositiveX) _positiveXActions[actionName] = key;
+        if (isNegativeX) _negativeXActions[actionName] = key;
+        if (isPositiveY) _positiveYActions[actionName] = key;
+        if (isNegativeY) _negativeYActions[actionName] = key;
+    }
+
+    public static void SetupDefaultActions()
+    {
+        AddActionKey("UiUp", KeyCode.UpArrow, isNegativeY: true);
+        AddActionKey("UiUp", KeyCode.W, isNegativeY: true);
+        AddActionKey("UiDown", KeyCode.DownArrow, isPositiveY: true);
+        AddActionKey("UiDown", KeyCode.S, isPositiveY: true);
+        AddActionKey("UiLeft", KeyCode.LeftArrow, isNegativeX: true);
+        AddActionKey("UiLeft", KeyCode.A, isNegativeX: true);
+        AddActionKey("UiRight", KeyCode.RightArrow, isPositiveX: true);
+        AddActionKey("UiRight", KeyCode.D, isPositiveX: true);
+        AddActionKey("UiAccept", KeyCode.Enter, isPositiveX: true);
+        AddActionKey("UiAccept", KeyCode.Space, isPositiveX: true);
+        AddActionKey("UiCancel", KeyCode.Escape, isPositiveX: true);
+    }
+}
+</file>
+
+<file path="KeyCode.cs">
+// file: KeyCode.cs
+// Minimal KeyCode enum based on common Win32 VK codes needed
+// Reference: https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
+namespace Cherris;
+
+public enum KeyCode
+{
+    Unknown = 0,
+
+    Space = 0x20,
+    Apostrophe = 222,
+    Comma = 188,
+    Minus = 189,
+    Period = 190,
+    Slash = 191,
+    Alpha0 = 48,
+    Alpha1 = 49,
+    Alpha2 = 50,
+    Alpha3 = 51,
+    Alpha4 = 52,
+    Alpha5 = 53,
+    Alpha6 = 54,
+    Alpha7 = 55,
+    Alpha8 = 56,
+    Alpha9 = 57,
+    Semicolon = 186,
+    Equal = 187,
+    A = 65,
+    B = 66,
+    C = 67,
+    D = 68,
+    E = 69,
+    F = 70,
+    G = 71,
+    H = 72,
+    I = 73,
+    J = 74,
+    K = 75,
+    L = 76,
+    M = 77,
+    N = 78,
+    O = 79,
+    P = 80,
+    Q = 81,
+    R = 82,
+    S = 83,
+    T = 84,
+    U = 85,
+    V = 86,
+    W = 87,
+    X = 88,
+    Y = 89,
+    Z = 90,
+    LeftBracket = 219,
+    Backslash = 220,
+    RightBracket = 221,
+    GraveAccent = 192,
+
+    Escape = 0x1B,
+    Enter = 0x0D,        // VK_RETURN
+    Tab = 0x09,         // VK_TAB
+    Backspace = 0x08,   // VK_BACK
+    Insert = 0x2D,      // VK_INSERT
+    Delete = 0x2E,      // VK_DELETE
+    RightArrow = 0x27,    // VK_RIGHT
+    LeftArrow = 0x25,     // VK_LEFT
+    DownArrow = 0x28,     // VK_DOWN
+    UpArrow = 0x26,       // VK_UP
+    PageUp = 0x21,      // VK_PRIOR
+    PageDown = 0x22,    // VK_NEXT
+    Home = 0x24,        // VK_HOME
+    End = 0x23,         // VK_END
+    CapsLock = 0x14,    // VK_CAPITAL
+    ScrollLock = 0x91,  // VK_SCROLL
+    NumLock = 0x90,     // VK_NUMLOCK
+    PrintScreen = 0x2C, // VK_SNAPSHOT
+    Pause = 0x13,       // VK_PAUSE
+    F1 = 0x70,          // VK_F1
+    F2 = 0x71,
+    F3 = 0x72,
+    F4 = 0x73,
+    F5 = 0x74,
+    F6 = 0x75,
+    F7 = 0x76,
+    F8 = 0x77,
+    F9 = 0x78,
+    F10 = 0x79,
+    F11 = 0x7A,
+    F12 = 0x7B,
+    Numpad0 = 0x60,     // VK_NUMPAD0
+    Numpad1 = 0x61,
+    Numpad2 = 0x62,
+    Numpad3 = 0x63,
+    Numpad4 = 0x64,
+    Numpad5 = 0x65,
+    Numpad6 = 0x66,
+    Numpad7 = 0x67,
+    Numpad8 = 0x68,
+    Numpad9 = 0x69,
+    NumpadDecimal = 0x6E,// VK_DECIMAL
+    NumpadDivide = 0x6F, // VK_DIVIDE
+    NumpadMultiply = 0x6A,// VK_MULTIPLY
+    NumpadSubtract = 0x6D,// VK_SUBTRACT
+    NumpadAdd = 0x6B,    // VK_ADD
+    NumpadEnter = 0x6C,  // VK_SEPARATOR (Often Numpad Enter)
+    LeftShift = 0xA0,   // VK_LSHIFT
+    LeftControl = 0xA2, // VK_LCONTROL
+    LeftAlt = 0xA4,     // VK_LMENU
+    LeftSuper = 0x5B,   // VK_LWIN
+    RightShift = 0xA1,  // VK_RSHIFT
+    RightControl = 0xA3,// VK_RCONTROL
+    RightAlt = 0xA5,    // VK_RMENU
+    RightSuper = 0x5C,  // VK_RWIN
+    Menu = 0x5D         // VK_APPS
+}
+</file>
+
+<file path="Log.cs">
+namespace Cherris;
+
+using System;
+using System.IO;
+using System.Runtime.CompilerServices;
+
+public class Log
+{
+    private readonly static string LogFilePath = "Res/Log.txt";
+    private readonly static ConsoleColor infoColor = ConsoleColor.DarkGray;
+    private readonly static ConsoleColor warningColor = ConsoleColor.Yellow;
+    private readonly static ConsoleColor errorColor = ConsoleColor.Red;
+
+    public static void Info(string message, [CallerLineNumber] int lineNumber = 0, [CallerFilePath] string filePath = "")
+    {
+        string fullMessage = $"[{DateTime.Now:HH:mm:ss}] [INFO] [{Path.GetFileName(filePath)}:{lineNumber}] {message}";
+        Console.ForegroundColor = infoColor;
+        Console.WriteLine(fullMessage);
+        Console.ResetColor();
+        File.AppendAllText(LogFilePath, Environment.NewLine + fullMessage);
+    }
+
+    public static void Info(string message, bool condition, [CallerLineNumber] int lineNumber = 0, [CallerFilePath] string filePath = "")
+    {
+        if (!condition)
+        {
+            return;
+        }
+
+        Console.ForegroundColor = infoColor;
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [INFO] [{Path.GetFileName(filePath)}:{lineNumber}] {message}");
+        Console.ResetColor();
+    }
+
+    public static void Warning(string message, [CallerLineNumber] int lineNumber = 0, [CallerFilePath] string filePath = "")
+    {
+        string fullMessage = $"[{DateTime.Now:HH:mm:ss}] [WARNING] [{Path.GetFileName(filePath)}:{lineNumber}] {message}";
+        Console.ForegroundColor = warningColor;
+        Console.WriteLine(fullMessage);
+        Console.ResetColor();
+        File.AppendAllText(LogFilePath, Environment.NewLine + fullMessage);
+    }
+
+    public static void Warning(string message, bool condition, [CallerLineNumber] int lineNumber = 0, [CallerFilePath] string filePath = "")
+    {
+        if (!condition)
+        {
+            return;
+        }
+
+        Console.ForegroundColor = warningColor;
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [WARNING] [{Path.GetFileName(filePath)}:{lineNumber}] {message}");
+        Console.ResetColor();
+    }
+
+    public static void Error(string message, [CallerLineNumber] int lineNumber = 0, [CallerFilePath] string filePath = "")
+    {
+        string fullMessage = $"[{DateTime.Now:HH:mm:ss}] [ERROR] - {Path.GetFileName(filePath)}:{lineNumber} - {message}";
+        Console.ForegroundColor = errorColor;
+        Console.WriteLine(fullMessage);
+        Console.ResetColor();
+        File.AppendAllText(LogFilePath, Environment.NewLine + fullMessage);
+    }
+
+    public static void Error(string message, bool condition, [CallerLineNumber] int lineNumber = 0, [CallerFilePath] string filePath = "")
+    {
+        if (!condition)
+        {
+            return;
+        }
+
+        Console.ForegroundColor = errorColor;
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [ERROR] - [{Path.GetFileName(filePath)}:{lineNumber}] - {message}");
+        Console.ResetColor();
+    }
+}
+</file>
+
+<file path="MainAppWindow.cs">
+using System;
+using Vortice.DirectWrite;
+using Vortice.Mathematics;
+
+namespace Cherris;
+
+public class MainAppWindow : Direct2DAppWindow
+{
+    public event Action? Closed;
+
+    public MainAppWindow(string title = "My DirectUI App", int width = 800, int height = 600)
+        : base(title, width, height)
+    {
+
+    }
+
+    protected override void DrawUIContent(DrawingContext context)
+    {
+        SceneTree.Instance.RenderScene(context);
+    }
+
+    protected override bool OnClose()
+    {
+        Log.Info("MainAppWindow OnClose called.");
+        Closed?.Invoke();
+        return base.OnClose();
+    }
+
+    protected override void Cleanup()
+    {
+        Log.Info("MainAppWindow Cleanup starting.");
+        VisualItem.CleanupResources();
+        base.Cleanup();
+        Log.Info("MainAppWindow Cleanup finished.");
+    }
+}
+</file>
+
+<file path="MouseButtonCode.cs">
+// file: MouseButtonCode.cs
+// Ensure this enum exists and is suitable.
+namespace Cherris;
+
+public enum MouseButtonCode
+{
+    Left = 0,
+    Right = 1,
+    Middle = 2, // Added Middle for completeness if needed
+    Side = 3,   // Often corresponds to XButton1
+    Extra = 4,  // Often corresponds to XButton2
+    Forward = 5,
+    Back = 6
+}
+</file>
+
+<file path="NativeMethods.cs">
+using System;
+using System.Runtime.InteropServices;
+
+namespace Cherris;
+
+internal static class NativeMethods
+{
+
+    public const uint CS_HREDRAW = 0x0002;
+    public const uint CS_VREDRAW = 0x0001;
+    public const uint CS_OWNDC = 0x0020;
+
+    public const uint WS_OVERLAPPEDWINDOW = 0xCF0000;
+    public const uint WS_VISIBLE = 0x10000000;
+
+    public const int WM_NCCREATE = 0x0081;
+    public const int WM_CREATE = 0x0001;
+    public const int WM_NCDESTROY = 0x0082;
+    public const int WM_PAINT = 0x000F;
+    public const int WM_DESTROY = 0x0002;
+    public const int WM_SIZE = 0x0005;
+    public const int WM_CLOSE = 0x0010;
+    public const int WM_KEYDOWN = 0x0100;
+    public const int WM_KEYUP = 0x0101;
+    public const int WM_SYSKEYDOWN = 0x0104;
+    public const int WM_SYSKEYUP = 0x0105;
+    public const int WM_LBUTTONDOWN = 0x0201;
+    public const int WM_LBUTTONUP = 0x0202;
+    public const int WM_RBUTTONDOWN = 0x0204;
+    public const int WM_RBUTTONUP = 0x0205;
+    public const int WM_MBUTTONDOWN = 0x0207;
+    public const int WM_MBUTTONUP = 0x0208;
+    public const int WM_XBUTTONDOWN = 0x020B;
+    public const int WM_XBUTTONUP = 0x020C;
+    public const int WM_MOUSEMOVE = 0x0200;
+    public const int WM_MOUSEWHEEL = 0x020A;
+    public const int WM_QUIT = 0x0012;
+
+
+    public const int CW_USEDEFAULT = unchecked((int)0x80000000);
+    public const int SW_SHOWNORMAL = 1;
+    public const int VK_ESCAPE = 0x1B;
+    public const int GWLP_USERDATA = -21;
+    public const int GCLP_HBRBACKGROUND = -10;
+
+    public const int IDI_APPLICATION = 32512;
+    public const int IDC_ARROW = 32512;
+
+    public const int WHEEL_DELTA = 120;
+    public const int XBUTTON1 = 0x0001;
+    public const int XBUTTON2 = 0x0002;
+
+    public const uint PM_REMOVE = 0x0001;
+
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    public struct WNDCLASSEX
+    {
+        public int cbSize;
+        public uint style;
+        public WndProc lpfnWndProc;
+        public int cbClsExtra;
+        public int cbWndExtra;
+        public IntPtr hInstance;
+        public IntPtr hIcon;
+        public IntPtr hCursor;
+        public IntPtr hbrBackground;
+        [MarshalAs(UnmanagedType.LPTStr)]
+        public string lpszMenuName;
+        [MarshalAs(UnmanagedType.LPTStr)]
+        public string lpszClassName;
+        public IntPtr hIconSm;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MSG
+    {
+        public IntPtr hwnd;
+        public uint message;
+        public IntPtr wParam;
+        public IntPtr lParam;
+        public uint time;
+        public POINT pt;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT
+    {
+        public int left;
+        public int top;
+        public int right;
+        public int bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    public struct CREATESTRUCT
+    {
+        public IntPtr lpCreateParams;
+        public IntPtr hInstance;
+        public IntPtr hMenu;
+        public IntPtr hwndParent;
+        public int cy;
+        public int cx;
+        public int y;
+        public int x;
+        public int style;
+        public string lpszName;
+        public string lpszClass;
+        public uint dwExStyle;
+    }
+
+
+    public delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern ushort RegisterClassEx([In] ref WNDCLASSEX lpwcx);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr CreateWindowEx(
+       uint dwExStyle,
+       string lpClassName,
+       string lpWindowName,
+       uint dwStyle,
+       int x,
+       int y,
+       int nWidth,
+       int nHeight,
+       IntPtr hWndParent,
+       IntPtr hMenu,
+       IntPtr hInstance,
+       IntPtr lpParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool UpdateWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool DestroyWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    public static extern IntPtr DefWindowProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern void PostQuitMessage(int nExitCode);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool PeekMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
+
+    [DllImport("user32.dll")]
+    public static extern bool TranslateMessage([In] ref MSG lpMsg);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr DispatchMessage([In] ref MSG lpmsg);
+
+    [DllImport("user32.dll")]
+    public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    public static extern bool ValidateRect(IntPtr hWnd, IntPtr lpRect);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern IntPtr GetModuleHandle(string lpModuleName);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr lpIconName);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+    private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW", SetLastError = true)]
+    private static extern IntPtr SetWindowLong32(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+    private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
+    private static extern IntPtr GetWindowLong32(IntPtr hWnd, int nIndex);
+
+    public static IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong)
+    {
+        if (IntPtr.Size == 8)
+            return SetWindowLongPtr64(hWnd, nIndex, dwNewLong);
+        else
+            return SetWindowLong32(hWnd, nIndex, dwNewLong);
+    }
+
+    public static IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex)
+    {
+        if (IntPtr.Size == 8)
+            return GetWindowLongPtr64(hWnd, nIndex);
+        else
+            return GetWindowLong32(hWnd, nIndex);
+    }
+
+
+    public static int GET_X_LPARAM(IntPtr lParam) => LOWORD(lParam);
+    public static int GET_Y_LPARAM(IntPtr lParam) => HIWORD(lParam);
+    public static short GET_WHEEL_DELTA_WPARAM(IntPtr wParam) => HIWORD(wParam);
+    public static short GET_XBUTTON_WPARAM(IntPtr wParam) => HIWORD(wParam);
+
+    public static int LOWORD(IntPtr ptr) => unchecked((short)(long)ptr);
+    public static short HIWORD(IntPtr ptr) => unchecked((short)((long)ptr >> 16));
+}
+</file>
+
+<file path="Node.cs">
+using Spectre.Console;
+
+namespace Cherris;
+
+public class Node
+{
+    public enum ProcessMode
+    {
+        Inherit,
+        Pausable,
+        WhenPaused,
+        Disabled,
+        Always
+    }
+
+    public static Node RootNode => SceneTree.Instance.RootNode!;
+    public static SceneTree Tree => SceneTree.Instance;
+
+    public string Name { get; set; } = "";
+    public Node? Parent { get; set; } = null;
+    public List<Node> Children { get; set; } = [];
+    public ProcessMode ProcessingMode = ProcessMode.Inherit;
+
+    public bool Active
+    {
+        get;
+
+        set
+        {
+            if (field == value)
+            {
+                return;
+            }
+
+            field = value;
+            ActiveChanged?.Invoke(this, Active);
+        }
+    } = true;
+
+    public string AbsolutePath
+    {
+        get
+        {
+            if (Parent is null)
+            {
+                // This is the root node
+                return "/root/";
+            }
+
+            Stack<string> pathStack = new();
+            Node? current = this;
+
+            // Traverse the hierarchy upwards, collecting names
+            while (current is not null && current.Parent is not null)
+            {
+                // Skip the root node's name (Parent will be null for root)
+                pathStack.Push(current.Name);
+                current = current.Parent;
+            }
+
+            // Build the absolute Pathetic
+            return $"/root/{string.Join("/", pathStack)}";
+        }
+    }
+
+    // Events
+
+    public delegate void ActiveEvent(Node sender, bool active);
+    public delegate void ChildEvent(Node sender, Node child);
+    public event ActiveEvent? ActiveChanged;
+    public event ChildEvent? ChildAdded;
+
+    // Main
+
+    public virtual void Make() { }
+
+    public virtual void Start() { }
+
+    public virtual void Ready() { }
+
+    public virtual void Free()
+    {
+        List<Node> childrenToDestroy = new(Children);
+
+        foreach (Node child in childrenToDestroy)
+        {
+            child.Free();
+        }
+
+        Parent?.Children.Remove(this);
+    }
+
+    // Process
+
+    public virtual void ProcessBegin() { }
+
+    public virtual void Process() { }
+
+    public virtual void ProcessEnd() { }
+
+    // Print children
+
+    public void PrintChildren()
+    {
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
+
+        string rootEmoji = NodeEmoji.GetEmojiForNodeType(this);
+        Tree root = new($"{rootEmoji} [green]{Name}[/]");
+
+        AddChildrenToTree(this, root);
+
+        AnsiConsole.Write(root);
+    }
+
+    private static void AddChildrenToTree(Node node, IHasTreeNodes parentNode)
+    {
+        foreach (Node child in node.Children)
+        {
+            string childEmoji = NodeEmoji.GetEmojiForNodeType(child);
+            TreeNode childNode = parentNode.AddNode($"{childEmoji} [blue]{child.Name}[/]");
+            AddChildrenToTree(child, childNode);
+        }
+    }
+
+    // Activation
+
+    public virtual void Activate()
+    {
+        Active = true;
+
+        foreach (Node child in Children)
+        {
+            child.Activate();
+        }
+    }
+
+    public virtual void Deactivate()
+    {
+        Active = false;
+
+        foreach (Node child in Children)
+        {
+            child.Deactivate();
+        }
+    }
+
+    // Get node
+
+    public T GetParent<T>() where T : Node
+    {
+        if (Parent is not null)
+        {
+            return (T)Parent;
+        }
+
+        return (T)this;
+    }
+    
+    public T GetNode<T>(string path) where T : Node
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            throw new ArgumentException("Pathetic cannot be null or empty.", nameof(path));
+        }
+
+        Node? currentNode;
+
+        if (path.StartsWith("/root"))
+        {
+            path = path["/root".Length..];
+            currentNode = SceneTree.Instance.RootNode;
+
+            if (path.StartsWith('/'))
+            {
+                path = path.Substring(1);
+            }
+
+            if (!string.IsNullOrEmpty(path))
+            {
+                string[] nodeNames = path.Split('/');
+                foreach (var name in nodeNames)
+                {
+                    if (name == "..")
+                    {
+                        // Traverse back to parent
+                        currentNode = currentNode?.Parent;
+                    }
+                    else
+                    {
+                        currentNode = currentNode?.GetChild(name);
+                    }
+
+                    if (currentNode == null)
+                    {
+                        throw new InvalidOperationException($"Node '{name}' not found in the scene tree.");
+                    }
+                }
+            }
+        }
+        else
+        {
+            currentNode = this;
+            string[] nodeNames = path.Split('/');
+            foreach (var name in nodeNames)
+            {
+                if (name == "..")
+                {
+                    // Traverse back to parent
+                    currentNode = currentNode?.Parent;
+                }
+                else if (name != "")
+                {
+                    currentNode = currentNode?.GetChild(name);
+                }
+
+                if (currentNode == null)
+                {
+                    throw new InvalidOperationException($"Node '{name}' not found in the scene tree.");
+                }
+            }
+        }
+
+        return currentNode as T ?? throw new InvalidOperationException("Node is not of the expected type.");
+    }
+    
+    public T? GetNodeOrNull<T>(string path) where T : Node
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return null;
+        }
+
+        Node? currentNode;
+
+        if (path.StartsWith("/root"))
+        {
+            path = path.Substring("/root".Length);
+            currentNode = SceneTree.Instance.RootNode;
+
+            if (path.StartsWith("/"))
+            {
+                path = path.Substring(1);
+            }
+
+            if (!string.IsNullOrEmpty(path))
+            {
+                string[] nodeNames = path.Split('/');
+                foreach (var name in nodeNames)
+                {
+                    if (name == "..")
+                    {
+                        // Traverse back to parent
+                        currentNode = currentNode?.Parent;
+                    }
+                    else
+                    {
+                        currentNode = currentNode?.GetChild(name);
+                    }
+
+                    if (currentNode == null)
+                    {
+                        return null;
+                    }
+                }
+            }
+        }
+        else
+        {
+            currentNode = this;
+            string[] nodeNames = path.Split('/');
+            foreach (var name in nodeNames)
+            {
+                if (name == "..")
+                {
+                    // Traverse back to parent
+                    currentNode = currentNode?.Parent;
+                }
+                else if (name != "")
+                {
+                    currentNode = currentNode?.GetChildOrNull(name);
+                }
+
+                if (currentNode == null)
+                {
+                    return null;
+                }
+            }
+        }
+
+        return currentNode as T;
+    }
+
+    // Get child
+
+    public T? GetChild<T>(string name) where T : Node
+    {
+        foreach (Node child in Children)
+        {
+            if (child.Name == name)
+            {
+                return (T)child;
+            }
+        }
+
+        return null;
+    }
+    
+    public T? GetChild<T>() where T : Node
+    {
+        foreach (Node child in Children)
+        {
+            if (child.GetType() == typeof(T))
+            {
+                return (T)child;
+            }
+        }
+
+        return null;
+    }
+
+    public Node GetChild(string name)
+    {
+        foreach (Node child in Children)
+        {
+            if (child.Name == name)
+            {
+                return child;
+            }
+        }
+
+        SceneTree.Instance.RootNode?.PrintChildren();
+
+        throw new InvalidOperationException($"Child node with name '{name}' not found.");
+    }
+
+    public Node? GetChildOrNull(string name)
+    {
+        foreach (Node child in Children)
+        {
+            if (child.Name == name)
+            {
+                return child;
+            }
+        }
+
+        return null;
+    }
+
+    // Add child
+
+    public Node AddChild(Node node)
+    {
+        node.Parent = this;
+
+        node.Make();
+
+        Children.Add(node);
+        ChildAdded?.Invoke(this, node);
+
+        return node;
+    }
+
+    public Node AddChild(Node node, string name)
+    {
+        node.Parent = this;
+        node.Name = name;
+
+        node.Make();
+
+        Children.Add(node);
+        ChildAdded?.Invoke(this, node);
+
+        return node;
+    }
+}
+</file>
+
+<file path="Node2D.cs">
+namespace Cherris;
+
+public class Node2D : VisualItem
+{
+    public Vector2 Position { get; set; } = Vector2.Zero;
+    public virtual float Rotation { get; set; } = 0;
+    public OriginPreset OriginPreset { get; set; } = OriginPreset.Center;
+    public bool InheritPosition { get; set; } = true;
+    public bool InheritOrigin { get; set; } = false;
+    public bool InheritScale { get; set; } = true;
+    public HAlignment HAlignment { get; set; } = HAlignment.Center;
+    public VAlignment VAlignment { get; set; } = VAlignment.Center;
+    public AnchorPreset AnchorPreset { get; set; } = AnchorPreset.None;
+
+    public Vector2 ScaledSize => Size * Scale;
+
+    public virtual Vector2 Size
+    {
+        get;
+        set
+        {
+            if (value == field)
+            {
+                return;
+            }
+
+            field = value;
+            SizeChanged?.Invoke(this, Size);
+        }
+    } = new(320, 320);
+
+    public virtual Vector2 Scale
+    {
+        get
+        {
+            return InheritScale && Parent is Node2D node2DParent
+                ? node2DParent.Scale
+                : (field);
+        }
+        set;
+    } = new(1, 1);
+
+    public virtual Vector2 GlobalPosition
+    {
+        get
+        {
+            if (Parent is Node2D parentNode)
+            {
+                Vector2 anchorOffset = AnchorPreset switch
+                {
+                    AnchorPreset.TopCenter => new Vector2(parentNode.Size.X * 0.5f, 0),
+                    AnchorPreset.TopLeft => Vector2.Zero, // Handle TopLeft case
+                    _ => Vector2.Zero
+                };
+                return InheritPosition
+                    ? parentNode.GlobalPosition + anchorOffset + Position
+                    : (field);
+            }
+            else
+            {
+                return Position;
+            }
+        }
+        set
+        {
+            field = value;
+            if (Parent is not Node2D)
+            {
+                Position = value;
+            }
+        }
+    }
+
+    public Vector2 Offset
+    {
+        get
+        {
+            if (InheritOrigin && Parent is Node2D parentNode)
+            {
+                return parentNode.Offset;
+            }
+            return field;
+        }
+        set;
+    } = Vector2.Zero;
+
+    public Vector2 Origin
+    {
+        get
+        {
+            float x = HAlignment switch
+            {
+                HAlignment.Center => Size.X * Scale.X / 2,
+                HAlignment.Left => 0,
+                HAlignment.Right => Size.X,
+                _ => 0
+            };
+
+            float y = VAlignment switch
+            {
+                VAlignment.Top => 0,
+                VAlignment.Center => Size.Y * Scale.Y / 2,
+                VAlignment.Bottom => Size.Y * Scale.Y,
+                _ => 0
+            };
+
+            Vector2 alignmentOffset = new(x, y);
+            return alignmentOffset + Offset;
+        }
+    }
+
+    // Events
+
+    public event EventHandler<Vector2>? SizeChanged;
+
+    // Methods
+
+    public void LookAt(Vector2 targetPosition)
+    {
+        Vector2 direction = targetPosition - GlobalPosition;
+        var angle = float.Atan2(direction.Y, direction.X) * 57.29578f;
+        Rotation = angle;
+    }
+}
+
+public enum AnchorPreset
+{
+    None,
+    TopCenter,
+    TopLeft // Added TopLeft preset
+}
+</file>
+
+<file path="NodeEmoji.cs">
+namespace Cherris;
+
+public static class NodeEmoji
+{
+    public static string GetEmojiForNodeType(Node node)
+    {
+        return node switch
+        {
+            //ParticleEmitter => "✨",
+            //Slider => "🎚️",
+            //Label => "💬",
+            //Camera => "🎥",
+            //RayCast => "⚡",
+            //Timer => "⏰",
+            //NavigationRegion => "🗺",
+            //NavigationAgent => "🧭",
+            //AudioPlayer => "🔉",
+            //Collider => "📦",
+            //Sprite => "🖼",
+            //Button => "🔘",
+            //ColorRectangle => "🟥",
+            //Node2D => "🟩",
+            _ => "⭕",
+        };
+    }
+}
+</file>
+
+<file path="PackedScene.cs">
+using System.Reflection;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
+
+namespace Cherris;
+
+public sealed class PackedScene(string path)
+{
+    private readonly string _path = path;
+    private static readonly IDeserializer _deserializer = new DeserializerBuilder()
+        .WithNamingConvention(CamelCaseNamingConvention.Instance)
+        .Build();
+
+    public T Instantiate<T>() where T : Node
+    {
+        var deferredNodeAssignments = new List<(Node, string, object)>();
+        var namedNodes = new Dictionary<string, Node>();
+
+        string yamlContent = File.ReadAllText(_path);
+        var rootElement = _deserializer.Deserialize<Dictionary<string, object>>(yamlContent);
+        Node rootNode = (T)ParseNode(rootElement, null, deferredNodeAssignments, namedNodes);
+        AssignDeferredNodes(deferredNodeAssignments, namedNodes);
+        return (T)rootNode;
+    }
+
+    private Node ParseNode(Dictionary<string, object> element, Node? parent, List<(Node, string, object)> deferredNodeAssignments, Dictionary<string, Node> namedNodes)
+    {
+        var node = CreateNodeInstance(element);
+        ProcessNestedScene(element, ref node);
+        SetNodeProperties(element, node, deferredNodeAssignments);
+        AddToParent(parent, node);
+        RegisterNode(node, namedNodes);
+        ProcessChildNodes(element, node, deferredNodeAssignments, namedNodes);
+        return node;
+    }
+
+    private static Node CreateNodeInstance(Dictionary<string, object> element)
+    {
+        if (!element.TryGetValue("Node", out var nodeDescriptorObj))
+            throw new KeyNotFoundException("Element is missing the 'Node' key.");
+        var nodeDescriptor = (string)nodeDescriptorObj;
+        var parts = nodeDescriptor.Split(["::"], StringSplitOptions.None);
+        if (parts.Length != 2)
+            throw new FormatException($"Invalid Node descriptor '{nodeDescriptor}'. Expected 'Type::Name'.");
+        var typeName = parts[0];
+        var nodeType = PackedSceneUtils.ResolveType(typeName);
+        var node = (Node)Activator.CreateInstance(nodeType)!;
+        node.Name = parts[1];
+        return node;
+    }
+
+    private static void ProcessNestedScene(Dictionary<string, object> element, ref Node node)
+    {
+        if (element.TryGetValue("path", out var pathValue))
+        {
+            if (!element.TryGetValue("Node", out var nodeDescriptorObj))
+                throw new KeyNotFoundException("Element with 'path' is missing the 'Node' key.");
+            var nodeDescriptor = (string)nodeDescriptorObj;
+            var parts = nodeDescriptor.Split(new[] { "::" }, StringSplitOptions.None);
+            if (parts.Length != 2)
+                throw new FormatException($"Invalid Node descriptor '{nodeDescriptor}'. Expected 'Type::Name'.");
+            var nodeName = parts[1];
+
+            var scenePath = (string)pathValue;
+            var nestedScene = new PackedScene(scenePath);
+            node = nestedScene.Instantiate<Node>();
+            node.Name = nodeName;
+        }
+    }
+
+    private static void SetNodeProperties(Dictionary<string, object> element, Node node, List<(Node, string, object)> deferredNodeAssignments)
+    {
+        var properties = element
+            .Where(kvp => !IsReservedKey(kvp.Key))
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+        PackedSceneUtils.SetProperties(node, properties, deferredNodeAssignments);
+    }
+
+    private static bool IsReservedKey(string key)
+    {
+        return key is "children" or "Node" or "path";
+    }
+
+    private static void AddToParent(Node? parent, Node node)
+    {
+        parent?.AddChild(node, node.Name);
+    }
+
+    private static void RegisterNode(Node node, Dictionary<string, Node> namedNodes)
+    {
+        namedNodes[node.Name] = node;
+    }
+
+    private void ProcessChildNodes(Dictionary<string, object> element, Node parentNode, List<(Node, string, object)> deferredNodeAssignments, Dictionary<string, Node> namedNodes)
+    {
+        if (!element.TryGetValue("children", out var childrenObj)) return;
+        var children = ConvertChildrenToList(childrenObj);
+        foreach (var child in children)
+        {
+            if (child is Dictionary<object, object> childDict)
+            {
+                var convertedChild = ConvertChildDictionary(childDict);
+                ParseNode(convertedChild, parentNode, deferredNodeAssignments, namedNodes);
+            }
+        }
+    }
+
+    private static List<object> ConvertChildrenToList(object childrenObj)
+    {
+        return childrenObj is List<object> list ? list : [];
+    }
+
+    private static Dictionary<string, object> ConvertChildDictionary(Dictionary<object, object> childDict)
+    {
+        return childDict.ToDictionary(kvp => kvp.Key.ToString()!, kvp => kvp.Value);
+    }
+
+    private void AssignDeferredNodes(List<(Node, string, object)> deferredNodeAssignments, Dictionary<string, Node> namedNodes)
+    {
+        foreach (var (targetNode, memberPath, nodePath) in deferredNodeAssignments)
+        {
+            AssignDeferredNode(targetNode, memberPath, nodePath, namedNodes);
+        }
+    }
+
+    private void AssignDeferredNode(Node targetNode, string memberPath, object nodePath, Dictionary<string, Node> namedNodes)
+    {
+        string[] pathParts = memberPath.Split('/');
+        object currentObject = targetNode;
+
+        for (int i = 0; i < pathParts.Length; i++)
+        {
+            string part = pathParts[i];
+            Type currentType = currentObject.GetType();
+            (MemberInfo? memberInfo, object? nextObject) = GetMemberAndNextObject(currentType, part, currentObject);
+            if (i == pathParts.Length - 1)
+            {
+                AssignNodeToMember(memberInfo, currentObject, nodePath, targetNode, namedNodes);
+            }
+            else
+            {
+                currentObject = nextObject!;
+            }
+        }
+    }
+
+    private static (MemberInfo?, object?) GetMemberAndNextObject(Type type, string memberName, object currentObject)
+    {
+        PropertyInfo? propertyInfo = type.GetProperty(memberName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (propertyInfo != null)
+        {
+            object? nextObject = propertyInfo.GetValue(currentObject) ?? Activator.CreateInstance(propertyInfo.PropertyType);
+            propertyInfo.SetValue(currentObject, nextObject);
+            return (propertyInfo, nextObject);
+        }
+
+        FieldInfo? fieldInfo = type.GetField(memberName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (fieldInfo != null)
+        {
+            object? nextObject = fieldInfo.GetValue(currentObject) ?? Activator.CreateInstance(fieldInfo.FieldType);
+            fieldInfo.SetValue(currentObject, nextObject);
+            return (fieldInfo, nextObject);
+        }
+
+        throw new Exception($"Member '{memberName}' not found on type '{type.Name}'.");
+    }
+
+    private static void AssignNodeToMember(MemberInfo? memberInfo, object targetObject, object nodePath, Node targetNode, Dictionary<string, Node> namedNodes)
+    {
+        if (memberInfo is PropertyInfo propertyInfo && propertyInfo.PropertyType.IsSubclassOf(typeof(Node)))
+        {
+            Node referencedNode = ResolveNodePath(nodePath, namedNodes, targetNode);
+            propertyInfo.SetValue(targetObject, referencedNode);
+        }
+        else if (memberInfo is FieldInfo fieldInfo && fieldInfo.FieldType.IsSubclassOf(typeof(Node)))
+        {
+            Node referencedNode = ResolveNodePath(nodePath, namedNodes, targetNode);
+            fieldInfo.SetValue(targetObject, referencedNode);
+        }
+        else
+        {
+            throw new Exception($"Member '{memberInfo?.Name}' is not a Node-derived type.");
+        }
+    }
+
+    private static Node ResolveNodePath(object nodePath, Dictionary<string, Node> namedNodes, Node targetNode)
+    {
+        if (nodePath is string pathString)
+        {
+            return namedNodes.TryGetValue(pathString, out Node? node) 
+                ? node 
+                : targetNode.GetNode<Node>(pathString);
+        }
+
+        throw new Exception($"Unsupported node path type: {nodePath.GetType()}");
+    }
+}
+</file>
+
+<file path="PackedSceneUtils.cs">
+using System.Collections;
+using System.Reflection;
+
+namespace Cherris;
+
+public static class PackedSceneUtils
+{
+    private const BindingFlags MemberBindingFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+    private static readonly string[] SpecialProperties = { "type", "name", "path" };
+
+    public static void SetProperties(Node node, Dictionary<string, object> element,
+        List<(Node, string, object)>? deferredNodeAssignments = null)
+    {
+        foreach (var (key, value) in element)
+        {
+            if (SpecialProperties.Contains(key)) continue;
+
+            if (key == "CollisionLayers" && value is IList layerList)
+            {
+                //// Convert string collision layers to their corresponding integer values
+                //var convertedLayers = layerList.Cast<object>().Select(layer =>
+                //{
+                //    if (layer is string layerName && CollisionServer.Instance.CollisionLayers.ContainsKey(layerName))
+                //    {
+                //        return CollisionServer.Instance.CollisionLayers[layerName];
+                //    }
+                //
+                //    return Convert.ToInt32(layer); // for numeric layers
+                //}).ToList();
+                //
+                //// Set the converted layers
+                //SetNestedMember(node, key, convertedLayers, deferredNodeAssignments);
+            }
+            else
+            {
+                SetNestedMember(node, key, value, deferredNodeAssignments);
+            }
+        }
+    }
+
+
+    public static void SetNestedMember(object target, string memberPath, object value,
+        List<(Node, string, object)>? deferredNodeAssignments = null)
+    {
+        var pathParts = memberPath.Split('/');
+        object currentObject = target;
+
+        for (var i = 0; i < pathParts.Length; i++)
+        {
+            var memberInfo = GetMemberInfo(currentObject.GetType(), pathParts[i]);
+            var isFinalSegment = i == pathParts.Length - 1;
+
+            if (isFinalSegment)
+            {
+                HandleFinalSegment(target, memberPath, currentObject, memberInfo, value, deferredNodeAssignments);
+            }
+            else
+            {
+                currentObject = GetOrCreateIntermediateObject(currentObject, memberInfo);
+            }
+        }
+    }
+
+    private static MemberInfo GetMemberInfo(Type type, string memberName)
+    {
+        var property = type.GetProperty(memberName, MemberBindingFlags);
+        if (property != null) return property;
+
+        var field = type.GetField(memberName, MemberBindingFlags);
+        if (field != null) return field;
+
+        throw new InvalidOperationException($"Member '{memberName}' not found on type '{type.Name}'");
+    }
+
+    private static void HandleFinalSegment(object rootTarget, string memberPath, object currentObject,
+        MemberInfo memberInfo, object value, List<(Node, string, object)>? deferredAssignments)
+    {
+        var memberType = memberInfo switch
+        {
+            PropertyInfo p => p.PropertyType,
+            FieldInfo f => f.FieldType,
+            _ => throw new InvalidOperationException("Unsupported member type")
+        };
+
+        if (ShouldDeferAssignment(memberType, value))
+        {
+            deferredAssignments?.Add(((Node)rootTarget, memberPath, value));
+        }
+        else
+        {
+            var convertedValue = ConvertValue(memberType, value);
+            SetMemberValue(currentObject, memberInfo, convertedValue);
+        }
+    }
+
+    private static bool ShouldDeferAssignment(Type memberType, object value)
+        => memberType.IsSubclassOf(typeof(Node)) && value is string;
+
+    private static object GetOrCreateIntermediateObject(object currentObject, MemberInfo memberInfo)
+    {
+        var existingValue = GetMemberValue(currentObject, memberInfo);
+        if (existingValue != null) return existingValue;
+
+        var newInstance = CreateMemberInstance(memberInfo);
+        SetMemberValue(currentObject, memberInfo, newInstance);
+        return newInstance;
+    }
+
+    private static object CreateMemberInstance(MemberInfo memberInfo)
+        => Activator.CreateInstance(memberInfo switch
+        {
+            PropertyInfo p => p.PropertyType,
+            FieldInfo f => f.FieldType,
+            _ => throw new InvalidOperationException("Unsupported member type")
+        }) ?? throw new InvalidOperationException("Failed to create instance");
+
+    private static object? GetMemberValue(object target, MemberInfo memberInfo)
+    {
+        return memberInfo switch
+        {
+            PropertyInfo p => p.GetValue(target),
+            FieldInfo f => f.GetValue(target),
+            _ => throw new InvalidOperationException("Unsupported member type")
+        };
+    }
+
+    private static void SetMemberValue(object target, MemberInfo memberInfo, object value)
+    {
+        switch (memberInfo)
+        {
+            case PropertyInfo p:
+                p.SetValue(target, value);
+                break;
+            case FieldInfo f:
+                f.SetValue(target, value);
+                break;
+            default:
+                throw new InvalidOperationException("Unsupported member type");
+        }
+    }
+
+    public static Type ResolveType(string typeName)
+    {
+        return AppDomain.CurrentDomain.GetAssemblies()
+            .Select(assembly => assembly.GetType(typeName, false) ?? assembly.GetType($"{assembly.GetName().Name}.{typeName}", false))
+            .FirstOrDefault(type => type != null)
+            ?? throw new TypeLoadException($"Type '{typeName}' not found");
+    }
+
+    public static object ConvertValue(Type targetType, object value)
+    {
+        return value switch
+        {
+            Dictionary<object, object> dict => ConvertNestedObject(targetType, dict),
+            IList list => ConvertList(targetType, list),
+            _ => ConvertPrimitive(targetType, value)
+        };
+    }
+
+    private static object ConvertNestedObject(Type targetType, Dictionary<object, object> dict)
+    {
+        var instance = Activator.CreateInstance(targetType)
+            ?? throw new InvalidOperationException($"Failed to create {targetType.Name} instance");
+
+        foreach (var (key, value) in dict)
+        {
+            string memberName = key.ToString() ?? throw new InvalidDataException("Dictionary key cannot be null");
+            MemberInfo memberInfo = GetMemberInfo(targetType, memberName);
+
+            var convertedValue = ConvertValue(GetMemberType(memberInfo), value);
+            SetMemberValue(instance, memberInfo, convertedValue);
+        }
+
+        return instance;
+    }
+
+    private static Type GetMemberType(MemberInfo memberInfo)
+        => memberInfo switch
+        {
+            PropertyInfo p => p.PropertyType,
+            FieldInfo f => f.FieldType,
+            _ => throw new InvalidOperationException("Unsupported member type")
+        };
+
+    private static object ConvertList(Type targetType, IList list)
+    {
+        if (targetType == typeof(List<int>))
+            return list.Cast<object>().Select(Convert.ToInt32).ToList();
+
+        return targetType.Name switch
+        {
+            nameof(Vector2) => ParseVector2(list),
+            nameof(Color) => ParseColor(list),
+            _ => throw new NotSupportedException($"Unsupported list conversion to {targetType}")
+        };
+    }
+
+    private static object ConvertPrimitive(Type targetType, object value)
+    {
+        string stringValue = value.ToString()?.TrimQuotes()
+            ?? throw new InvalidOperationException("Value cannot be null");
+
+        if (targetType.IsEnum)
+        {
+            return Enum.Parse(targetType, stringValue);
+        }
+
+        return targetType switch
+        {
+            _ when targetType == typeof(int)         => int.Parse(stringValue),
+            _ when targetType == typeof(uint)        => uint.Parse(stringValue),
+            _ when targetType == typeof(float)       => float.Parse(stringValue),
+            _ when targetType == typeof(double)      => double.Parse(stringValue),
+            _ when targetType == typeof(bool)        => bool.Parse(stringValue),
+            _ when targetType == typeof(string)      => stringValue,
+            //_ when targetType == typeof(AudioStream) => AudioStream.Load(stringValue)!,
+            _ when targetType == typeof(AudioStream) => ResourceLoader.Load<AudioStream>(stringValue)!,
+            _ when targetType == typeof(Sound)       => ResourceLoader.Load<Sound>(stringValue),
+            _ when targetType == typeof(Animation)   => ResourceLoader.Load<Animation>(stringValue),
+            _ when targetType == typeof(Texture)     => ResourceLoader.Load<Texture>(stringValue),
+            _ when targetType == typeof(Font)        => ResourceLoader.Load<Font>(stringValue),
+            _ => throw new NotSupportedException($"Unsupported type: {targetType.Name}")
+        };
+    }
+
+    private static Vector2 ParseVector2(IList list)
+    {
+        if (list.Count != 2) 
+        { 
+            throw new ArgumentException("Vector2 requires exactly 2 elements");
+        }
+
+        return new(
+            Convert.ToSingle(list[0]),
+            Convert.ToSingle(list[1])
+        );
+    }
+
+    private static Color ParseColor(IList list)
+    {
+        if (list.Count < 3 || list.Count > 4)
+        {
+            throw new ArgumentException("Color requires 3 or 4 elements");
+        }
+
+        return new(
+            Convert.ToByte(list[0]),
+            Convert.ToByte(list[1]),
+            Convert.ToByte(list[2]),
+            list.Count > 3 ? Convert.ToByte(list[3]) : (byte)255
+        );
+    }
+
+    private static string TrimQuotes(this string input)
+        => input.Length >= 2 && (input[0] == '"' || input[0] == '\'')
+            ? input[1..^1]
+            : input;
+}
+</file>
+
+<file path="RenderCore.cs">
+using Raylib_cs;
+
+namespace Cherris;
+
+public sealed class RenderCore
+{
+    private static RenderCore? _instance;
+    public static RenderCore Instance => _instance ??= new();
+
+    public Camera? Camera;
+    public Shader? PostProcessingShader { get; set; }
+
+    private readonly List<DrawCommand> drawCommands = [];
+    private RenderTexture2D renderTexture;
+
+    // Main
+
+    private RenderCore()
+    {
+        Vector2 windowSize = DisplayServer.Instance.OriginalWindowSize;
+        renderTexture = Raylib.LoadRenderTexture((int)windowSize.X, (int)windowSize.Y);
+
+        DisplayServer.Instance.WindowSizeChanged += WindowSizeChanged;
+
+        //PostProcessingShader = Shader.Load(null, "Res/Shaders/Bloom.fs");
+    }
+
+    private void WindowSizeChanged(Vector2 obj)
+    {
+        renderTexture = Raylib.LoadRenderTexture(
+            (int)DisplayServer.WindowSize.X,
+            (int)DisplayServer.WindowSize.Y);
+    }
+
+    public void Process()
+    {
+        Raylib.BeginTextureMode(renderTexture);
+            //Raylib.ClearBackground(Color.DarkGray);
+            BeginCameraMode();
+                ProcessDrawCommands();
+            EndCameraMode();
+        Raylib.EndTextureMode();
+    
+        BeginShaderMode(PostProcessingShader);
+            //Rectangle source = new(0, 0, renderTexture.Texture.Width, -renderTexture.Texture.Height);
+            //Raylib.DrawTextureRec(renderTexture.Texture, source, Vector2.Zero, Color.White);
+        EndShaderMode();
+    }
+
+    public void Process2()
+    {
+        //Raylib.ClearBackground(Color.DarkGray);
+        //BeginShaderMode(PostProcessingShader);
+        //    BeginCameraMode();
+        //        ProcessDrawCommands();
+        //    EndCameraMode();
+        //EndShaderMode();
+    }
+
+    public void Submit(Action drawAction, int layer)
+    {
+        drawCommands.Add(new(drawAction, layer));
+    }
+
+    public Vector2 GetScreenToWorld(Vector2 position)
+    {
+        return Camera is null
+            ? position
+            : Raylib.GetScreenToWorld2D(position, Camera);
+    }
+
+    public Vector2 GetWorldToScreen(Vector2 position)
+    {
+        return Camera is null
+            ? position 
+            : Raylib.GetWorldToScreen2D(position, Camera);
+    }
+
+    // Scissor mode
+
+    public static void BeginScissorMode(Vector2 position, Vector2 size)
+    {
+        Raylib.BeginScissorMode(
+            (int)position.X,
+            (int)position.Y,
+            (int)size.X,
+            (int)size.Y);
+    }
+
+    public static void EndScissorMode()
+    {
+        Raylib.EndScissorMode();
+    }
+
+    // Camera
+
+    public void SetCamera(Camera camera)
+    {
+        Camera = camera;
+    }
+
+    private void BeginCameraMode()
+    {
+        if (Camera is null)
+        {
+            return;
+        }
+
+        Camera2D cam = new()
+        {
+            Target = Camera.GlobalPosition,
+            Offset = DisplayServer.WindowSize / 2,
+            Zoom = Camera.Zoom,
+        };
+
+        Raylib.BeginMode2D(cam);
+    }
+
+    private void EndCameraMode()
+    {
+        if (Camera is null)
+        {
+            return;
+        }
+
+        Raylib.EndMode2D();
+    }
+
+    // Shader mode
+
+    public static void BeginShaderMode(Shader? shader)
+    {
+        if (shader is null)
+        {
+            return;
+        }
+
+        Raylib.BeginShaderMode(shader);
+    }
+
+    public static void EndShaderMode()
+    {
+        Raylib.EndShaderMode();
+    }
+
+    // Other
+
+    private void ProcessDrawCommands()
+    {
+        foreach (DrawCommand command in drawCommands.OrderBy(c => c.Layer))
+        {
+            command.DrawAction.Invoke();
+        }
+
+        drawCommands.Clear();
+    }
+
+    private class DrawCommand(Action drawAction, int layer)
+    {
+        public Action DrawAction { get; } = drawAction;
+        public int Layer { get; } = layer;
+    }
+}
+</file>
+
+<file path="ResourceLoader.cs">
+namespace Cherris;
+
+public sealed class ResourceLoader
+{
+    public static T? Load<T>(string path)
+    {
+        return typeof(T) switch
+        {
+            var t when t == typeof(AudioStream) => (T)(object)AudioStreamCache.Instance.Get(path)!,
+            var t when t == typeof(Texture) => (T)(object)TextureCache.Instance.Get(path),
+            var t when t == typeof(Font) => (T)(object)FontCache.Instance.Get(path),
+            var t when t == typeof(Sound) => (T)(object)SoundCache.Instance.Get(path),
+            var t when t == typeof(Animation) => (T)(object)AnimationCache.Instance.Get(path),
+            _ => throw new InvalidOperationException($"Unsupported resource type: {typeof(T)}")
+        };
+    }
+}
+</file>
+
+<file path="SceneTree.cs">
+// file: SceneTree.cs
+using System.Runtime.CompilerServices;
+
+namespace Cherris;
+
+public sealed class SceneTree
+{
+    public static SceneTree Instance { get; } = new();
+
+    public Node? RootNode { get; set; }
+    public bool Paused { get; set; }
+
+    private readonly ConditionalWeakTable<Node, object> readyNodes = [];
+    private readonly List<SceneTreeTimer> timers = [];
+    private readonly List<Tween> activeTweens = [];
+
+    private SceneTree() { }
+
+    public void Process()
+    {
+        if (RootNode is null)
+        {
+            return;
+        }
+
+        ProcessNode(RootNode);
+
+        ProcessTweens();
+
+        if (!Paused)
+        {
+            ProcessTimers();
+        }
+    }
+
+    public void RenderScene(DrawingContext context)
+    {
+        if (RootNode is null)
+        {
+            return;
+        }
+
+        RenderNode(RootNode, context);
+    }
+
+    private void ProcessNode(Node node)
+    {
+        if (node is null || !node.Active)
+        {
+            return;
+        }
+
+        Node.ProcessMode effectiveMode = ComputeEffectiveProcessMode(node);
+        bool shouldProcess = ShouldProcess(effectiveMode);
+
+        if (shouldProcess)
+        {
+            EnsureNodeReady(node);
+            node.ProcessBegin();
+            node.Process();
+        }
+
+        foreach (Node child in node.Children.ToList())
+        {
+            ProcessNode(child);
+        }
+
+        if (shouldProcess)
+        {
+            node.ProcessEnd();
+        }
+    }
+
+    private void EnsureNodeReady(Node node)
+    {
+        if (!readyNodes.TryGetValue(node, out _))
+        {
+            node.Ready();
+            readyNodes.Add(node, null);
+        }
+    }
+
+    private static Node.ProcessMode ComputeEffectiveProcessMode(Node node)
+    {
+        if (node.ProcessingMode != Node.ProcessMode.Inherit)
+        {
+            return node.ProcessingMode;
+        }
+
+        Node? current = node.Parent;
+
+        while (current != null)
+        {
+            if (current.ProcessingMode != Node.ProcessMode.Inherit)
+            {
+                return current.ProcessingMode;
+            }
+
+            current = current.Parent;
+        }
+
+        return Node.ProcessMode.Pausable;
+    }
+
+    private bool ShouldProcess(Node.ProcessMode mode) => mode switch
+    {
+        Node.ProcessMode.Disabled => false,
+        Node.ProcessMode.Always => true,
+        Node.ProcessMode.Pausable => !Paused,
+        Node.ProcessMode.WhenPaused => Paused,
+        _ => false
+    };
+
+    private static void RenderNode(Node node, DrawingContext context)
+    {
+        if (node is VisualItem { Visible: true } visualItem)
+        {
+            visualItem.Draw(context);
+        }
+
+        foreach (Node child in node.Children.ToList())
+        {
+            RenderNode(child, context);
+        }
+    }
+
+    public SceneTreeTimer CreateTimer(float time)
+    {
+        SceneTreeTimer timer = new(time);
+        timers.Add(timer);
+        return timer;
+    }
+
+    public void RemoveTimer(SceneTreeTimer timer)
+    {
+        timers.Remove(timer);
+    }
+
+    private void ProcessTimers()
+    {
+        foreach (SceneTreeTimer timer in timers.ToList())
+        {
+            timer.Process();
+        }
+    }
+
+    public void ChangeScene(Node node)
+    {
+        RootNode?.Free();
+        RootNode = node;
+    }
+
+    public Tween CreateTween(Node creatorNode, Node.ProcessMode processMode = Node.ProcessMode.Inherit)
+    {
+        Tween tween = new(creatorNode, processMode);
+        activeTweens.Add(tween);
+        return tween;
+    }
+
+    private void ProcessTweens()
+    {
+        foreach (Tween tween in activeTweens.ToList())
+        {
+            if (tween.ShouldProcess(Paused))
+            {
+
+            }
+
+            if (!tween.Active)
+            {
+                activeTweens.Remove(tween);
+            }
+        }
+    }
+}
+</file>
+
+<file path="SceneTreeTimer.cs">
+namespace Cherris;
+
+public class SceneTreeTimer(float waitTime)
+{
+    public float WaitTime { get; set; } = waitTime;
+    private float timePassed = 0;
+
+    public delegate void TimerEventHandler();
+    public event TimerEventHandler? Timeout;
+
+    public void Process()
+    {
+        //timePassed += Time.Delta;
+
+        if (timePassed >= WaitTime)
+        {
+            Timeout?.Invoke();
+            SceneTree.Instance.RemoveTimer(this);
+        }
+    }
+}
+</file>
+
+<file path="Time.cs">
+namespace Cherris;
+
+public class Time
+{
+    public static float Delta = 0.1f;
+}
+</file>
+
+<file path="Tween.cs">
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+
+namespace Cherris;
+
+public class Tween(Node creatorNode, Node.ProcessMode processMode = Node.ProcessMode.Inherit)
+{
+    public bool Active = true;
+
+    private readonly List<TweenStep> steps = [];
+    private readonly Node creatorNode = creatorNode;
+    private readonly Node.ProcessMode processMode = processMode;
+
+    private static readonly bool debug = false;
+
+    public bool Stopped { get; private set; }
+
+    public void Stop()
+    {
+        Stopped = true;
+        Active = false;
+    }
+
+    public void TweenProperty(Node node, string propertyPath, float targetValue, float duration)
+    {
+        try
+        {
+            ArgumentNullException.ThrowIfNull(node);
+
+            if (string.IsNullOrEmpty(propertyPath))
+            {
+                throw new ArgumentException("Property path cannot be null or empty.", nameof(propertyPath));
+            }
+
+            Log.Info($"[Tween] Starting tween on {node.Name} for {propertyPath}", debug);
+            
+            float startValue = GetFloatValue(node, propertyPath);
+            
+            Log.Info($"[Tween] Start value: {startValue} ➔ Target: {targetValue} ({duration}s)", debug);
+
+            steps.Add(new TweenStep(node, propertyPath, startValue, targetValue, duration));
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Tween] Error starting tween: {ex}");
+            Active = false;
+        }
+    }
+
+    public void Update(float delta)
+    {
+        if (!Active || Stopped)
+        {
+            return;
+        }
+
+        foreach (TweenStep step in steps.ToList())
+        {
+            step.Elapsed += delta;
+            float t = Math.Clamp(step.Elapsed / step.Duration, 0, 1);
+            float currentValue = step.StartValue + (step.EndValue - step.StartValue) * t;
+
+            Log.Info($"[Tween] Updating {step.Node.Name}.{step.PropertyPath} {currentValue:0.00} ({t:P0})", debug);
+
+            SetFloatValueDirect(step.Node, step.PropertyPath, currentValue);
+
+            if (step.Elapsed >= step.Duration)
+            {
+                Log.Info($"[Tween] Completed {step.Node.Name}.{step.PropertyPath}", debug);
+                steps.Remove(step);
+            }
+        }
+
+        if (steps.Count == 0)
+        {
+            Log.Info("[Tween] All steps completed", debug);
+            Active = false;
+        }
+    }
+
+    public bool ShouldProcess(bool treePaused)
+    {
+        var effectiveMode = processMode == Node.ProcessMode.Inherit
+            ? GetEffectiveProcessMode(creatorNode)
+            : processMode;
+
+        return effectiveMode switch
+        {
+            Node.ProcessMode.Disabled => false,
+            Node.ProcessMode.Always => true,
+            Node.ProcessMode.Pausable => !treePaused,
+            Node.ProcessMode.WhenPaused => treePaused,
+            _ => false
+        };
+    }
+
+    private static Node.ProcessMode GetEffectiveProcessMode(Node node)
+    {
+        Node? current = node;
+
+        while (current != null)
+        {
+            if (current.ProcessingMode != Node.ProcessMode.Inherit)
+            {
+                return current.ProcessingMode;
+            }
+
+            current = current.Parent;
+        }
+
+        return Node.ProcessMode.Pausable;
+    }
+
+    private static float GetFloatValue(Node node, string propertyPath)
+    {
+        object? current = node;
+
+        foreach (string part in propertyPath.Split('/'))
+        {
+            if (current is null)
+            {
+                throw new InvalidOperationException(
+                    $"Intermediate value is null in path '{propertyPath}' on node {node.Name}");
+            }
+
+            Type type = current.GetType();
+            PropertyInfo? property = type.GetProperty(part);
+            FieldInfo? field = type.GetField(part);
+
+            MemberInfo? member = property ?? (MemberInfo?)field
+                ?? throw new ArgumentException($"Property or field '{part}' not found in {type.Name}");
+
+            current = member is PropertyInfo prop
+                ? prop.GetValue(current)
+                : ((FieldInfo)member).GetValue(current);
+        }
+
+        return current is not null
+            ? (float)current
+            : throw new InvalidOperationException($"Value for path '{propertyPath}' is null on node {node.Name}");
+    }
+
+    private static void SetFloatValueDirect(Node node, string propertyPath, float value)
+    {
+        string[] parts = propertyPath.Split('/');
+        object? current = node;
+
+        for (int i = 0; i < parts.Length - 1; i++)
+        {
+            if (current is null)
+            {
+                throw new InvalidOperationException(
+                    $"Intermediate value is null in path '{propertyPath}' on node {node.Name}");
+            }
+
+            Type type = current.GetType();
+            PropertyInfo? property = type.GetProperty(parts[i]);
+            FieldInfo? field = type.GetField(parts[i]);
+
+            MemberInfo? member = property ?? (MemberInfo?)field
+                ?? throw new ArgumentException($"Property or field '{parts[i]}' not found in {type.Name}");
+
+            current = member is PropertyInfo prop
+                ? prop.GetValue(current)
+                : ((FieldInfo)member).GetValue(current);
+        }
+
+        if (current is null)
+        {
+            throw new InvalidOperationException(
+                $"Final target is null in path '{propertyPath}' on node {node.Name}");
+        }
+
+        Type finalType = current.GetType();
+        string finalPart = parts[^1];
+        PropertyInfo? finalProperty = finalType.GetProperty(finalPart);
+        FieldInfo? finalField = finalType.GetField(finalPart);
+
+        MemberInfo finalMember = finalProperty ?? (MemberInfo?)finalField
+            ?? throw new ArgumentException($"Property or field '{finalPart}' not found in {finalType.Name}");
+
+        if (finalMember is PropertyInfo targetProp)
+        {
+            targetProp.SetValue(current, value);
+        }
+        else if (finalMember is FieldInfo targetField)
+        {
+            targetField.SetValue(current, value);
+        }
+    }
+
+    private record TweenStep(Node Node, string PropertyPath, float StartValue, float EndValue, float Duration)
+    {
+        public float Elapsed { get; set; }
+    }
+}
+</file>
+
+<file path="VerticalAlignment.cs">
+namespace Cherris;
+
+public enum VAlignment
+{
+    Top,
+    Center,
+    Bottom,
+    None
+}
+</file>
+
+<file path="VisualItem.cs">
+// file: VisualItem.cs
+using SharpGen.Runtime;
+using Vortice.Direct2D1;
+using Vortice.DirectWrite;
+using Vortice.Mathematics;
+using D2D = Vortice.Direct2D1;
+using DW = Vortice.DirectWrite;
+
+namespace Cherris;
+
+public abstract class VisualItem : Node
+{
+    private bool fieldVisible = true;
+    private int fieldLayer = 0;
+
+    private static readonly Dictionary<Color4, ID2D1SolidColorBrush> brushCache = new();
+    private static readonly Dictionary<string, IDWriteTextFormat> textFormatCache = new();
+
+    public bool Visible
+    {
+        get => fieldVisible;
+        set
+        {
+            if (fieldVisible == value)
+            {
+                return;
+            }
+
+            fieldVisible = value;
+            VisibleChanged?.Invoke(this, fieldVisible);
+        }
+    }
+
+    public int Layer
+    {
+        get => fieldLayer;
+        set
+        {
+            if (fieldLayer == value)
+            {
+                return;
+            }
+
+            fieldLayer = value;
+            LayerChanged?.Invoke(this, fieldLayer);
+        }
+    }
+
+    public delegate void VisibleEvent(VisualItem sender, bool visible);
+    public delegate void LayerEvent(VisualItem sender, int layer);
+
+    public event VisibleEvent? VisibleChanged;
+    public event LayerEvent? LayerChanged;
+
+    public virtual void Draw(DrawingContext context) { }
+
+
+    public static void CleanupResources()
+    {
+        foreach (var brush in brushCache.Values)
+        {
+            brush?.Dispose();
+        }
+        brushCache.Clear();
+
+        foreach (var format in textFormatCache.Values)
+        {
+            format?.Dispose();
+        }
+        textFormatCache.Clear();
+        Console.WriteLine("VisualItem static resources cleaned.");
+    }
+
+
+    protected static ID2D1SolidColorBrush? GetOrCreateBrush(DrawingContext context, Color4 color)
+    {
+        if (context.RenderTarget is null)
+        {
+            return null;
+        }
+
+        if (brushCache.TryGetValue(color, out ID2D1SolidColorBrush? brush) && brush is not null)
+        {
+            return brush;
+        }
+        else if (brushCache.ContainsKey(color))
+        {
+            brushCache.Remove(color);
+        }
+
+        try
+        {
+            brush = context.RenderTarget.CreateSolidColorBrush(color);
+            if (brush is not null)
+            {
+                brushCache[color] = brush;
+            }
+            return brush;
+        }
+        catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
+        {
+            Console.WriteLine($"Recreate target detected in GetOrCreateBrush for color {color}.");
+            CleanupResources();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error creating brush for color {color}: {ex.Message}");
+            return null;
+        }
+    }
+
+    protected static IDWriteTextFormat? GetOrCreateTextFormat(DrawingContext context, ButtonStyle style)
+    {
+        if (context.DWriteFactory is null || style is null)
+        {
+            return null;
+        }
+
+        string cacheKey = $"{style.FontName}_{style.FontSize}_{style.FontWeight}_{style.FontStyle}_{style.FontStretch}";
+
+        if (textFormatCache.TryGetValue(cacheKey, out IDWriteTextFormat? format) && format is not null)
+        {
+            return format;
+        }
+        else if (textFormatCache.ContainsKey(cacheKey))
+        {
+            textFormatCache.Remove(cacheKey);
+        }
+
+        try
+        {
+            format = context.DWriteFactory.CreateTextFormat(
+                style.FontName,
+                null,
+                style.FontWeight,
+                style.FontStyle,
+                style.FontStretch,
+                style.FontSize,
+                "en-us"
+            );
+
+            if (format is not null)
+            {
+                textFormatCache[cacheKey] = format;
+            }
+            return format;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error creating text format for key {cacheKey}: {ex.Message}");
+            return null;
+        }
+    }
+
+
+    protected void DrawStyledRectangle(DrawingContext context, Rect bounds, BoxStyle style)
+    {
+        if (context.RenderTarget is null || style is null || bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            DrawBoxStyleHelper(context, bounds, style);
+        }
+        catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
+        {
+            Console.WriteLine("Recreate target detected in DrawStyledRectangle.");
+            CleanupResources();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error drawing styled rectangle: {ex.Message}");
+        }
+    }
+
+    protected void DrawFormattedText(DrawingContext context, string text, Rect layoutRect, ButtonStyle style, HAlignment hAlignment, VAlignment vAlignment)
+    {
+        if (string.IsNullOrEmpty(text) || context.RenderTarget is null || style is null || layoutRect.Width <= 0 || layoutRect.Height <= 0)
+        {
+            return;
+        }
+
+        ID2D1SolidColorBrush? textBrush = GetOrCreateBrush(context, style.FontColor);
+        IDWriteTextFormat? textFormat = GetOrCreateTextFormat(context, style);
+
+        if (textBrush is null || textFormat is null)
+        {
+            Console.WriteLine($"Could not get brush or format for drawing text '{text}'.");
+            return;
+        }
+
+        try
+        {
+            textFormat.TextAlignment = hAlignment switch
+            {
+                HAlignment.Left => DW.TextAlignment.Leading,
+                HAlignment.Center => DW.TextAlignment.Center,
+                HAlignment.Right => DW.TextAlignment.Trailing,
+                _ => DW.TextAlignment.Leading
+            };
+            textFormat.ParagraphAlignment = vAlignment switch
+            {
+                VAlignment.Top => DW.ParagraphAlignment.Near,
+                VAlignment.Center => DW.ParagraphAlignment.Center,
+                VAlignment.Bottom => DW.ParagraphAlignment.Far,
+                _ => DW.ParagraphAlignment.Near
+            };
+
+            context.RenderTarget.DrawText(
+                text,
+                textFormat,
+                layoutRect,
+                textBrush,
+                D2D.DrawTextOptions.Clip
+            );
+        }
+        catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
+        {
+            Console.WriteLine("Recreate target detected in DrawFormattedText.");
+            CleanupResources();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error drawing formatted text '{text}': {ex.Message}");
+        }
+    }
+
+
+    private static void DrawBoxStyleHelper(DrawingContext context, Rect bounds, BoxStyle style)
+    {
+        var renderTarget = context.RenderTarget;
+        if (renderTarget is null || style is null || bounds.Width <= 0 || bounds.Height <= 0) return;
+
+        ID2D1SolidColorBrush? fillBrush = GetOrCreateBrush(context, style.FillColor);
+        ID2D1SolidColorBrush? borderBrush = GetOrCreateBrush(context, style.BorderColor);
+
+        float borderTop = Math.Max(0f, style.BorderLengthTop);
+        float borderRight = Math.Max(0f, style.BorderLengthRight);
+        float borderBottom = Math.Max(0f, style.BorderLengthBottom);
+        float borderLeft = Math.Max(0f, style.BorderLengthLeft);
+
+        bool hasVisibleFill = style.FillColor.A > 0 && fillBrush is not null;
+        bool hasVisibleBorder = style.BorderColor.A > 0 && borderBrush is not null && (borderTop > 0 || borderRight > 0 || borderBottom > 0 || borderLeft > 0);
+
+        if (!hasVisibleFill && !hasVisibleBorder) return;
+
+        if (style.Roundness > 0.0f)
+        {
+            float maxRadius = Math.Min(bounds.Width * 0.5f, bounds.Height * 0.5f);
+            float radius = Math.Max(0f, maxRadius * float.Clamp(style.Roundness, 0.0f, 1.0f));
+
+            if (float.IsFinite(radius) && radius >= 0)
+            {
+                if (hasVisibleBorder && borderBrush is not null)
+                {
+                    System.Drawing.RectangleF outerRectF = new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
+                    RoundedRectangle outerRoundedRect = new(outerRectF, radius, radius);
+                    renderTarget.FillRoundedRectangle(outerRoundedRect, borderBrush);
+                }
+
+                if (hasVisibleFill && fillBrush is not null)
+                {
+                    float fillX = bounds.X + borderLeft;
+                    float fillY = bounds.Y + borderTop;
+                    float fillWidth = Math.Max(0f, bounds.Width - borderLeft - borderRight);
+                    float fillHeight = Math.Max(0f, bounds.Height - borderTop - borderBottom);
+
+                    if (fillWidth > 0 && fillHeight > 0)
+                    {
+                        float avgBorderX = (borderLeft + borderRight) * 0.5f;
+                        float avgBorderY = (borderTop + borderBottom) * 0.5f;
+                        float innerRadiusX = Math.Max(0f, radius - avgBorderX);
+                        float innerRadiusY = Math.Max(0f, radius - avgBorderY);
+
+                        System.Drawing.RectangleF fillRectF = new(fillX, fillY, fillWidth, fillHeight);
+                        RoundedRectangle fillRoundedRect = new(fillRectF, innerRadiusX, innerRadiusY);
+                        renderTarget.FillRoundedRectangle(fillRoundedRect, fillBrush);
+                    }
+                    else if (!hasVisibleBorder)
+                    {
+                        System.Drawing.RectangleF outerRectF = new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
+                        RoundedRectangle outerRoundedRect = new(outerRectF, radius, radius);
+                        renderTarget.FillRoundedRectangle(outerRoundedRect, fillBrush);
+                    }
+                }
+                return;
+            }
+        }
+
+        if (hasVisibleBorder && borderBrush is not null)
+        {
+            renderTarget.FillRectangle(bounds, borderBrush);
+        }
+
+        if (hasVisibleFill && fillBrush is not null)
+        {
+            float fillX = bounds.X + borderLeft;
+            float fillY = bounds.Y + borderTop;
+            float fillWidth = Math.Max(0f, bounds.Width - borderLeft - borderRight);
+            float fillHeight = Math.Max(0f, bounds.Height - borderTop - borderBottom);
+
+            if (fillWidth > 0 && fillHeight > 0)
+            {
+                renderTarget.FillRectangle(new Rect(fillX, fillY, fillWidth, fillHeight), fillBrush);
+            }
+            else if (!hasVisibleBorder)
+            {
+                renderTarget.FillRectangle(bounds, fillBrush);
+            }
+        }
+    }
+}
+</file>
+
+<file path="Win32Window.cs">
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Collections.Generic;
+using System.Numerics;
+
+namespace Cherris;
+
+public abstract class Win32Window : IDisposable
+{
+    private readonly string _windowClassName;
+    private readonly string _windowTitle;
+    private readonly int _initialWidth;
+    private readonly int _initialHeight;
+    private IntPtr _hwnd = IntPtr.Zero;
+    private IntPtr _hInstance = IntPtr.Zero;
+    private NativeMethods.WndProc _wndProcDelegate;
+    private bool _isDisposed = false;
+    private static readonly HashSet<string> RegisteredClassNames = new HashSet<string>();
+    private GCHandle _gcHandle;
+
+    public IntPtr Handle => _hwnd;
+    public int Width { get; protected set; }
+    public int Height { get; protected set; }
+    public bool IsOpen { get; private set; } = false;
+
+
+    protected Win32Window(string title, int width, int height, string className = null)
+    {
+        _windowTitle = title ?? "Win32 Window";
+        _initialWidth = width > 0 ? width : 800;
+        _initialHeight = height > 0 ? height : 600;
+        Width = _initialWidth;
+        Height = _initialHeight;
+        _windowClassName = className ?? ("Win32Window_" + Guid.NewGuid().ToString("N"));
+        _wndProcDelegate = WindowProcedure;
+        Input.SetupDefaultActions();
+    }
+
+    public bool TryCreateWindow()
+    {
+        if (_hwnd != IntPtr.Zero)
+        {
+            Log.Warning("Window handle already exists. Creation skipped.");
+            return true;
+        }
+
+        _hInstance = NativeMethods.GetModuleHandle(null);
+        if (_hInstance == IntPtr.Zero)
+        {
+            _hInstance = Process.GetCurrentProcess().Handle;
+        }
+
+        lock (RegisteredClassNames)
+        {
+            if (!RegisteredClassNames.Contains(_windowClassName))
+            {
+                var wndClass = new NativeMethods.WNDCLASSEX
+                {
+                    cbSize = Marshal.SizeOf(typeof(NativeMethods.WNDCLASSEX)),
+                    style = NativeMethods.CS_HREDRAW | NativeMethods.CS_VREDRAW | NativeMethods.CS_OWNDC,
+                    lpfnWndProc = _wndProcDelegate,
+                    cbClsExtra = 0,
+                    cbWndExtra = 0,
+                    hInstance = _hInstance,
+                    hIcon = NativeMethods.LoadIcon(IntPtr.Zero, (IntPtr)NativeMethods.IDI_APPLICATION),
+                    hCursor = NativeMethods.LoadCursor(IntPtr.Zero, NativeMethods.IDC_ARROW),
+                    hbrBackground = IntPtr.Zero,
+                    lpszMenuName = null,
+                    lpszClassName = _windowClassName,
+                    hIconSm = NativeMethods.LoadIcon(IntPtr.Zero, (IntPtr)NativeMethods.IDI_APPLICATION)
+                };
+
+                if (NativeMethods.RegisterClassEx(ref wndClass) == 0)
+                {
+                    Log.Error($"RegisterClassEx failed: {Marshal.GetLastWin32Error()}");
+                    return false;
+                }
+                RegisteredClassNames.Add(_windowClassName);
+                Log.Info($"Class '{_windowClassName}' registered.");
+            }
+        }
+
+        _gcHandle = GCHandle.Alloc(this);
+        _hwnd = NativeMethods.CreateWindowEx(
+            0,
+            _windowClassName,
+            _windowTitle,
+            NativeMethods.WS_OVERLAPPEDWINDOW,
+            NativeMethods.CW_USEDEFAULT, NativeMethods.CW_USEDEFAULT,
+            _initialWidth, _initialHeight,
+            IntPtr.Zero, IntPtr.Zero, _hInstance, GCHandle.ToIntPtr(_gcHandle));
+
+        if (_hwnd == IntPtr.Zero)
+        {
+            Log.Error($"CreateWindowEx failed: {Marshal.GetLastWin32Error()}");
+            if (_gcHandle.IsAllocated) _gcHandle.Free();
+            return false;
+        }
+
+        Log.Info($"Window created with HWND: {_hwnd}");
+        IsOpen = true;
+        return true;
+    }
+
+    public void ShowWindow()
+    {
+        if (_hwnd != IntPtr.Zero && IsOpen)
+        {
+            NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_SHOWNORMAL);
+            NativeMethods.UpdateWindow(_hwnd);
+        }
+        else
+        {
+            Log.Warning("Cannot show window: Handle is zero or window is not open.");
+        }
+    }
+
+    public bool InitializeWindowAndGraphics()
+    {
+        if (_hwnd == IntPtr.Zero || !IsOpen)
+        {
+            Log.Error("Cannot initialize: Window handle is invalid or window is closed.");
+            return false;
+        }
+
+
+        return Initialize();
+    }
+
+    public void ProcessMessages()
+    {
+        while (NativeMethods.PeekMessage(out NativeMethods.MSG msg, IntPtr.Zero, 0, 0, NativeMethods.PM_REMOVE))
+        {
+            if (msg.message == NativeMethods.WM_QUIT)
+            {
+                Log.Info("WM_QUIT received, signaling window close.");
+                IsOpen = false;
+                break;
+            }
+
+            NativeMethods.TranslateMessage(ref msg);
+            NativeMethods.DispatchMessage(ref msg);
+        }
+    }
+
+    private static IntPtr WindowProcedure(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        Win32Window? window = null;
+
+        if (msg == NativeMethods.WM_NCCREATE)
+        {
+            try
+            {
+                var cs = Marshal.PtrToStructure<NativeMethods.CREATESTRUCT>(lParam);
+                var handle = GCHandle.FromIntPtr(cs.lpCreateParams);
+                window = handle.Target as Win32Window;
+                if (window != null)
+                {
+                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, GCHandle.ToIntPtr(handle));
+                    Log.Info($"WM_NCCREATE: Associated instance with HWND {hWnd}");
+                }
+                else
+                {
+                    Log.Warning($"WM_NCCREATE: Failed to get window instance from GCHandle for HWND {hWnd}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Error during WM_NCCREATE: {ex}");
+            }
+        }
+        else
+        {
+            IntPtr ptr = NativeMethods.GetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA);
+            if (ptr != IntPtr.Zero)
+            {
+                try
+                {
+                    var handle = GCHandle.FromIntPtr(ptr);
+                    if (handle.IsAllocated && handle.Target != null)
+                    {
+                        window = handle.Target as Win32Window;
+                    }
+                    else
+                    {
+                        Log.Warning($"WindowProcedure: GCHandle {ptr} is not allocated or target is null for HWND {hWnd}, Msg={msg}");
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    Log.Warning($"WindowProcedure: Invalid GCHandle {ptr} retrieved for HWND {hWnd}, Msg={msg}. Resetting GWLP_USERDATA.");
+
+                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"Error retrieving GCHandle: {ex}");
+                }
+            }
+        }
+
+        if (window != null)
+        {
+            try
+            {
+                return window.HandleMessage(hWnd, msg, wParam, lParam);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Error handling message {msg} for HWND {hWnd}: {ex}");
+            }
+        }
+        else if (msg != NativeMethods.WM_NCCREATE && msg != NativeMethods.WM_NCDESTROY)
+        {
+            Log.Info($"WindowProcedure: No window instance found for HWND {hWnd}, Msg={msg}. Using DefWindowProc.", true);
+        }
+
+        return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
+    }
+
+    protected virtual IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        int xPos = NativeMethods.GET_X_LPARAM(lParam);
+        int yPos = NativeMethods.GET_Y_LPARAM(lParam);
+        Vector2 mousePos = new Vector2(xPos, yPos);
+
+        switch (msg)
+        {
+            case NativeMethods.WM_PAINT:
+                RenderFrame();
+                NativeMethods.ValidateRect(hWnd, IntPtr.Zero);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_SIZE:
+                Width = NativeMethods.LOWORD(lParam);
+                Height = NativeMethods.HIWORD(lParam);
+                OnSize(Width, Height);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_MOUSEMOVE:
+                Input.UpdateMousePosition(mousePos);
+                OnMouseMove(xPos, yPos);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_LBUTTONDOWN:
+                Input.UpdateMouseButton(MouseButtonCode.Left, true);
+                OnMouseDown(MouseButton.Left, xPos, yPos);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_LBUTTONUP:
+                Input.UpdateMouseButton(MouseButtonCode.Left, false);
+                OnMouseUp(MouseButton.Left, xPos, yPos);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_RBUTTONDOWN:
+                Input.UpdateMouseButton(MouseButtonCode.Right, true);
+                OnMouseDown(MouseButton.Right, xPos, yPos);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_RBUTTONUP:
+                Input.UpdateMouseButton(MouseButtonCode.Right, false);
+                OnMouseUp(MouseButton.Right, xPos, yPos);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_MBUTTONDOWN:
+                Input.UpdateMouseButton(MouseButtonCode.Middle, true);
+                OnMouseDown(MouseButton.Middle, xPos, yPos);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_MBUTTONUP:
+                Input.UpdateMouseButton(MouseButtonCode.Middle, false);
+                OnMouseUp(MouseButton.Middle, xPos, yPos);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_XBUTTONDOWN:
+                int xButton1 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
+                if (xButton1 == NativeMethods.XBUTTON1) Input.UpdateMouseButton(MouseButtonCode.Side, true);
+                if (xButton1 == NativeMethods.XBUTTON2) Input.UpdateMouseButton(MouseButtonCode.Extra, true);
+                OnMouseDown(xButton1 == NativeMethods.XBUTTON1 ? MouseButton.XButton1 : MouseButton.XButton2, xPos, yPos);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_XBUTTONUP:
+                int xButton2 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
+                if (xButton2 == NativeMethods.XBUTTON1) Input.UpdateMouseButton(MouseButtonCode.Side, false);
+                if (xButton2 == NativeMethods.XBUTTON2) Input.UpdateMouseButton(MouseButtonCode.Extra, false);
+                OnMouseUp(xButton2 == NativeMethods.XBUTTON1 ? MouseButton.XButton1 : MouseButton.XButton2, xPos, yPos);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_MOUSEWHEEL:
+                short wheelDelta = NativeMethods.GET_WHEEL_DELTA_WPARAM(wParam);
+                Input.UpdateMouseWheel((float)wheelDelta / NativeMethods.WHEEL_DELTA);
+                OnMouseWheel(wheelDelta);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_KEYDOWN:
+            case NativeMethods.WM_SYSKEYDOWN:
+                int vkCodeDown = (int)wParam;
+                if (Enum.IsDefined(typeof(KeyCode), vkCodeDown))
+                {
+                    Input.UpdateKey((KeyCode)vkCodeDown, true);
+                }
+                OnKeyDown(vkCodeDown);
+
+                if (vkCodeDown == NativeMethods.VK_ESCAPE && !IsKeyDownHandled(vkCodeDown))
+                {
+                    Close();
+                }
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_KEYUP:
+            case NativeMethods.WM_SYSKEYUP:
+                int vkCodeUp = (int)wParam;
+                if (Enum.IsDefined(typeof(KeyCode), vkCodeUp))
+                {
+                    Input.UpdateKey((KeyCode)vkCodeUp, false);
+                }
+                OnKeyUp(vkCodeUp);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_CLOSE:
+                if (OnClose())
+                {
+                    NativeMethods.DestroyWindow(hWnd);
+                }
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_DESTROY:
+                Log.Info($"WM_DESTROY for {hWnd}.");
+                OnDestroy();
+
+                NativeMethods.PostQuitMessage(0);
+                return IntPtr.Zero;
+
+            case NativeMethods.WM_NCDESTROY:
+                Log.Info($"WM_NCDESTROY: Releasing GCHandle for {hWnd}.");
+                IntPtr ptr = NativeMethods.GetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA);
+                if (ptr != IntPtr.Zero)
+                {
+                    try
+                    {
+                        var handle = GCHandle.FromIntPtr(ptr);
+                        if (handle.IsAllocated)
+                        {
+                            handle.Free();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"Error freeing GCHandle on NCDESTROY: {ex.Message}");
+                    }
+
+                    NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
+                }
+
+                if (_gcHandle.IsAllocated && GCHandle.ToIntPtr(_gcHandle) == ptr)
+                {
+                    _gcHandle = default;
+                }
+                _hwnd = IntPtr.Zero;
+                IsOpen = false;
+                return IntPtr.Zero;
+
+            default:
+                return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
+        }
+    }
+
+    public void Close()
+    {
+        if (_hwnd != IntPtr.Zero && IsOpen)
+        {
+            Log.Info($"Programmatically closing window {_hwnd}.");
+            NativeMethods.PostMessage(_hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        }
+    }
+
+    public void Invalidate()
+    {
+        if (_hwnd != IntPtr.Zero && IsOpen)
+        {
+            NativeMethods.InvalidateRect(_hwnd, IntPtr.Zero, false);
+        }
+    }
+
+
+    protected abstract bool Initialize();
+    public abstract void RenderFrame();
+    protected virtual void OnSize(int width, int height) { }
+    protected virtual void OnMouseDown(MouseButton button, int x, int y) { }
+    protected virtual void OnMouseUp(MouseButton button, int x, int y) { }
+    protected virtual void OnMouseMove(int x, int y) { }
+    protected virtual void OnKeyDown(int virtualKeyCode) { }
+    protected virtual void OnKeyUp(int virtualKeyCode) { }
+    protected virtual void OnMouseWheel(short delta) { }
+    protected virtual bool IsKeyDownHandled(int virtualKeyCode) { return false; }
+    protected virtual bool OnClose() { return true; }
+    protected virtual void OnDestroy() { }
+    protected abstract void Cleanup();
+
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!_isDisposed)
+        {
+            if (disposing)
+            {
+                Log.Info("Disposing Win32Window (managed)...");
+                Cleanup();
+            }
+
+            Log.Info("Disposing Win32Window (unmanaged)...");
+            if (_hwnd != IntPtr.Zero)
+            {
+                Log.Info($"Requesting destroy for window {_hwnd} during Dispose...");
+
+
+                NativeMethods.DestroyWindow(_hwnd);
+
+            }
+            else
+            {
+
+                if (_gcHandle.IsAllocated)
+                {
+                    Log.Warning("Freeing potentially dangling GCHandle during Dispose (window handle was already zero)...");
+                    try { _gcHandle.Free(); } catch (Exception ex) { Log.Error($"Error freeing GCHandle: {ex.Message}"); }
+                }
+            }
+
+            _isDisposed = true;
+            IsOpen = false;
+            Log.Info("Win32Window disposed.");
+        }
+    }
+
+    ~Win32Window()
+    {
+        Log.Warning("Win32Window Finalizer called!");
+        Dispose(false);
+    }
+}
+
+
+public enum MouseButton { Left, Right, Middle, XButton1, XButton2 }
+</file>
+
+<file path="Resources\Animation.cs">
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
+
+namespace Cherris;
+
+public class Animation
+{
+    public List<Keyframe> Keyframes { get; set; } = new();
+
+    public class Keyframe
+    {
+        [YamlMember(Alias = "T")]
+        public float Time { get; set; }
+
+        public Dictionary<string, Dictionary<string, float>> Nodes { get; set; } = [];
+    }
+
+    public Animation() { }
+
+    public Animation(string filePath)
+    {
+        var deserializer = new DeserializerBuilder()
+            .WithNamingConvention(PascalCaseNamingConvention.Instance)
+            .Build();
+
+        Keyframes = deserializer.Deserialize<List<Keyframe>>(File.ReadAllText(filePath));
+    }
+}
+</file>
+
+<file path="Resources\AudioStream.cs">
+namespace Cherris;
+
+public class AudioStream
+{
+    //public float Length { get; private set; } = 0.1f;
+    //public string Path { get; private set; }
+    //
+    //private Music raylibMusic;
+    //
+    //public static implicit operator Music(AudioStream audio) => audio.raylibMusic;
+    //
+    //private AudioStream(Music music, float length, string path)
+    //{
+    //    raylibMusic = music;
+    //    Length = length;
+    //    Path = path;
+    //}
+    //
+    public static AudioStream? Load(string filePath)
+    {
+        return null;
+    }
+}
+</file>
+
+<file path="Resources\Font.cs">
+using Raylib_cs;
+
+namespace Cherris;
+
+public class Font
+{
+    public string Name = "";
+    public int Size = 0;
+
+    private Raylib_cs.Font raylibFont;
+
+    public Vector2 Dimensions
+    {
+        get
+        {
+            return Raylib.MeasureTextEx(raylibFont, " ", Size, 0);
+        }
+    }
+
+    public Font(string filePath, int size)
+    {
+        Size = size;
+        Name = Path.GetFileNameWithoutExtension(filePath);
+
+        int[] codepoints = new int[255 - 32 + 1];
+        for (int i = 0; i < codepoints.Length; i++)
+        {
+            codepoints[i] = 32 + i;
+        }
+
+        raylibFont = Raylib.LoadFontEx(filePath, size, codepoints, codepoints.Length);
+        Raylib.SetTextureFilter(raylibFont.Texture, TextureFilter.Bilinear);
+    }
+
+    public static implicit operator Raylib_cs.Font(Font textFont) => textFont.raylibFont;
+
+    public static Vector2 MeasureText(Font font, string text, int size, float spacing)
+    {
+        Vector2 measurements = Raylib.MeasureTextEx(
+            font,
+            text,
+            size,
+            spacing);
+
+        return measurements;
+    }
+}
+</file>
+
+<file path="Resources\Shader.cs">
+namespace Cherris;
+
+public class Shader
+{
+    private Raylib_cs.Shader raylibShader;
+
+    private Shader(Raylib_cs.Shader shader)
+    {
+        raylibShader = shader;
+    }
+
+    public static Shader? Load(string? vertexShaderPath, string? fragmentShaderPath)
+    {
+        Raylib_cs.Shader shader = Raylib_cs.Raylib.LoadShader(vertexShaderPath, fragmentShaderPath);
+
+        if (!Raylib_cs.Raylib.IsShaderValid(shader))
+        {
+            Log.Error($"Failed to load shader: {vertexShaderPath},{fragmentShaderPath}");
+            return null;
+        }
+
+        return new(shader);
+    }
+
+    public static implicit operator Raylib_cs.Shader(Shader shader)
+    {
+        return shader.raylibShader;
+    }
+
+    public void SetValue(int loc, float[] values, ShaderUniformDataType uniformType)
+    {
+        Raylib_cs.Raylib.SetShaderValue(
+            this,
+            loc,
+            values,
+            (Raylib_cs.ShaderUniformDataType)uniformType);
+    }
+
+    public int GetLocation(string uniformName)
+    {
+        return Raylib_cs.Raylib.GetShaderLocation(this, uniformName);
+    }
+}
+</file>
+
+<file path="Resources\ShaderUniformDataType.cs">
+namespace Cherris;
+
+public enum ShaderUniformDataType
+{
+    Float = 0,
+    Vec2,
+    Vec3,
+    Vec4,
+    Int,
+    IVec2,
+    IVec3,
+    IVec4,
+    Sampler2D
+}
+</file>
+
+<file path="Resources\Sound.cs">
+namespace Cherris;
+
+public class Sound
+{
+    public string Path { get; private set; } = "";
+
+    private Raylib_cs.Sound raylibSound;
+
+    public static implicit operator Raylib_cs.Sound(Sound sound) => sound.raylibSound;
+
+    private Sound(Raylib_cs.Sound sound, string filePath)
+    {
+        raylibSound = sound;
+        Path = filePath;
+    }
+
+    public static Sound? Load(string filePath)
+    {
+        Raylib_cs.Sound sound = Raylib_cs.Raylib.LoadSound(filePath);
+
+        if (sound.FrameCount == 0)
+        {
+            return null;
+        }
+
+        return new(sound, filePath);
+    }
+
+    public void Play(string bus = "Master")
+    {
+        //AudioServer.Instance.PlaySound(this, bus);
+    }
+}
+</file>
+
+<file path="Resources\Texture.cs">
+using Raylib_cs;
+
+namespace Cherris;
+
+public class Texture
+{
+    public Vector2 Size { get; private set; } = Vector2.Zero;
+    private Texture2D raylibTexture;
+
+    public Texture(string filePath)
+    {
+        string pngPath =
+            Path.GetExtension(filePath).ToLower() == ".png" ?
+            filePath :
+            GetPngPath(filePath);
+
+        raylibTexture = Raylib.LoadTexture(pngPath);
+        Size = new(raylibTexture.Width, raylibTexture.Height);
+
+        if (pngPath != filePath)
+        {
+            File.Delete(pngPath);
+        }
+    }
+
+    public Texture()
+    {
+    }
+
+    public static implicit operator Texture2D(Texture texture) => texture.raylibTexture;
+
+    private static string GetPngPath(string imagePath)
+    {
+        if (!Directory.Exists("Res/Cherris/Temporary"))
+        {
+            Directory.CreateDirectory("Res/Temporary");
+        }
+
+        string pngPath = $"Res/Cherris/Temporary/{Path.GetFileNameWithoutExtension(imagePath)}.png";
+
+        if (!File.Exists(pngPath))
+        {
+            //using var image = SixLabors.ImageSharp.Image.Load(imagePath);
+            //image.SaveAsPng(pngPath);
+        }
+
+        return pngPath;
+    }
+}
+</file>
+
+<file path="Resources\Cache\AnimationCache.cs">
+namespace Cherris;
+
+public class AnimationCache
+{
+    private static AnimationCache? _instance;
+    public static AnimationCache Instance => _instance ??= new AnimationCache();
+
+    private readonly Dictionary<string, Animation> animations = [];
+
+    private AnimationCache() { }
+
+    public Animation Get(string animationPath)
+    {
+        if (animations.TryGetValue(animationPath, out Animation? animation))
+        {
+            return animation;
+        }
+
+        Animation newAnimation = new(animationPath);
+        return newAnimation;
+    }
+
+    public void Dispose()
+    {
+        animations.Clear();
+    }
+}
+</file>
+
+<file path="Resources\Cache\AudioStreamCache.cs">
+namespace Cherris;
+
+public class AudioStreamCache
+{
+    public static AudioStreamCache? Instance => field ??= new();
+
+    private readonly Dictionary<string, AudioStream?> audioStreams = [];
+
+    private AudioStreamCache() { }
+
+    public AudioStream? Get(string filePath)
+    {
+        if (audioStreams.TryGetValue(filePath, out AudioStream? audio))
+        {
+            return audio;
+        }
+
+        AudioStream? newAudio = AudioStream.Load(filePath);
+
+        if (newAudio is null)
+        {
+            Log.Error($"Could not load audio stream: {filePath}");
+            return null;
+        }
+
+        audioStreams[filePath] = newAudio;
+        return newAudio;
+    }
+}
+</file>
+
+<file path="Resources\Cache\FontCache.cs">
+namespace Cherris;
+
+public sealed class FontCache
+{
+    public static FontCache? Instance => field ??= new();
+
+    private readonly Dictionary<string, Font> fonts = [];
+
+    private FontCache() { }
+
+    public Font Get(string fontKey)
+    {
+        if (fonts.TryGetValue(fontKey, out Font? font))
+        {
+            return font;
+        }
+
+        (string fontPath, int fontSize) = ParseFontKey(fontKey);
+
+        // Load the font and store it
+        Font newFont = new(fontPath, fontSize);
+        fonts.Add(fontKey, newFont);
+
+        return newFont;
+    }
+
+    private static (string fontPath, int fontSize) ParseFontKey(string fontKey)
+    {
+        int colonIndex = fontKey.LastIndexOf(':');
+
+        if (colonIndex == -1)
+        {
+            throw new ArgumentException($"Invalid font key format: {fontKey}. Expected format: 'FontPath:WindowSize'.");
+        }
+
+        string fontPath = fontKey[..colonIndex];
+        string sizeString = fontKey[(colonIndex + 1)..];
+
+        if (!int.TryParse(sizeString, out int fontSize))
+        {
+            throw new ArgumentException($"Invalid font size in: {fontKey}. WindowSize must be a valid integer.");
+        }
+
+        return (fontPath, fontSize);
+    }
+}
+</file>
+
+<file path="Resources\Cache\ShaderCache.cs">
+/*
+namespace Cherris;
+
+public class ShaderCache
+{
+    public static ShaderCache Instance { get; } = new();
+
+    private readonly Dictionary<string, Shader?> shaders = [];
+
+    private ShaderCache() { }
+
+    public Shader? Get(string key)
+    {
+        if (shaders.TryGetValue(key, out Shader? shader))
+        {
+            return shader;
+        }
+
+        var newSound = Shad.Load(key);
+
+        if (newSound is null)
+        {
+            Log.Error($"[SoundCache] Could not load sound: {key}");
+        }
+
+        shaders[key] = newSound;
+        return newSound;
+    }
+}
+*/
+</file>
+
+<file path="Resources\Cache\SoundCache.cs">
+namespace Cherris;
+
+public class SoundCache
+{
+    public static SoundCache? Instance => field ??= new();
+
+    private readonly Dictionary<string, Sound?> soundEffects = [];
+
+    private SoundCache() { }
+
+    public Sound? Get(string soundKey)
+    {
+        if (soundEffects.TryGetValue(soundKey, out Sound? soundEffect))
+        {
+            return soundEffect;
+        }
+
+        Sound? newSound = Sound.Load(soundKey);
+
+        if (newSound is null)
+        {
+            Log.Error($"Could not load sound: {soundKey}");
+        }
+
+        soundEffects[soundKey] = newSound;
+        return newSound;
+    }
+}
+</file>
+
+<file path="Resources\Cache\TextureCache.cs">
+namespace Cherris;
+
+public sealed class TextureCache
+{
+    public static TextureCache? Instance => field ??= new();
+
+    private readonly Dictionary<string, Texture> textures = [];
+
+    private TextureCache() { }
+
+    public Texture Get(string path)
+    {
+        if (textures.TryGetValue(path, out Texture? value))
+        {
+            return value;
+        }
+
+        Texture textureWrapper = new(path);
+        textures[path] = textureWrapper;
+
+        return textureWrapper;
+    }
+
+    public void Remove(string path)
+    {
+        if (textures.TryGetValue(path, out Texture? value))
+        {
+            //Raylib.UnloadTexture(value);
+            textures.Remove(path);
+
+            string pngPath = GetPngPath(path);
+
+            if (pngPath != path && File.Exists(pngPath))
+            {
+                File.Delete(pngPath);
+            }
+        }
+    }
+
+    private string GetPngPath(string path)
+    {
+        string pngPath =
+            Path.GetExtension(path).ToLower() == ".png" ?
+            path :
+            $"Res/Temporary/{Path.GetFileNameWithoutExtension(path)}.png";
+
+        return pngPath;
+    }
+}
+</file>
+
