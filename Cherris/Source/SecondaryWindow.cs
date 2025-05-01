@@ -9,7 +9,6 @@ public class SecondaryWindow : Direct2DAppWindow
     private readonly WindowNode ownerNode;
     private Vector2 currentMousePosition = Vector2.Zero;
 
-
     public SecondaryWindow(string title, int width, int height, WindowNode owner)
         : base(title, width, height)
     {
@@ -17,31 +16,30 @@ public class SecondaryWindow : Direct2DAppWindow
         ApplicationCore.Instance.RegisterSecondaryWindow(this);
     }
 
+    protected override NativeMethods.DWMSBT GetSystemBackdropType()
+    {
+        // Acrylic is suitable for transient/secondary windows
+        return NativeMethods.DWMSBT.DWMSBT_TRANSIENTWINDOW;
+    }
+
     protected override void DrawUIContent(DrawingContext context)
     {
-
         ownerNode?.RenderChildren(context);
     }
 
     protected override bool OnClose()
     {
         Log.Info($"SecondaryWindow '{Title}' OnClose called.");
-
-
         ownerNode?.QueueFree();
-
-
         return base.OnClose();
     }
 
     protected override void Cleanup()
     {
         Log.Info($"SecondaryWindow '{Title}' Cleanup starting.");
-
         base.Cleanup();
         Log.Info($"SecondaryWindow '{Title}' Cleanup finished.");
     }
-
 
     protected override IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
@@ -49,13 +47,10 @@ public class SecondaryWindow : Direct2DAppWindow
         int yPos = NativeMethods.GET_Y_LPARAM(lParam);
         Vector2 mousePos = new Vector2(xPos, yPos);
 
-
         currentMousePosition = mousePos;
-
 
         switch (msg)
         {
-
             case NativeMethods.WM_LBUTTONDOWN:
                 Input.UpdateMouseButton(MouseButtonCode.Left, true);
                 break;
@@ -112,11 +107,8 @@ public class SecondaryWindow : Direct2DAppWindow
                 break;
         }
 
-
         return base.HandleMessage(hWnd, msg, wParam, lParam);
     }
 
-
     public Vector2 GetLocalMousePosition() => currentMousePosition;
-
 }

@@ -28,7 +28,8 @@ public abstract class Direct2DAppWindow : Win32Window
     protected IDWriteFactory? dwriteFactory;
     protected ID2D1HwndRenderTarget? renderTarget;
 
-    protected Color4 backgroundColor = new(0.1f, 0.1f, 0.15f, 1.0f);
+    // Ensure background is black for best Mica compatibility
+    protected Color4 backgroundColor = Colors.Black;
     protected bool graphicsInitialized = false;
 
     private Stopwatch fpsTimer = new();
@@ -42,7 +43,6 @@ public abstract class Direct2DAppWindow : Win32Window
     private readonly string fpsFontName = "Consolas";
     private readonly float fpsFontSize = 14.0f;
 
-
     private Dictionary<Color4, ID2D1SolidColorBrush> brushCache = new();
     private Dictionary<string, IDWriteTextFormat> textFormatCache = new();
 
@@ -53,14 +53,12 @@ public abstract class Direct2DAppWindow : Win32Window
     protected override bool Initialize()
     {
         Log.Info($"Direct2DAppWindow '{Title}' initializing Vortice Graphics...");
-
         return InitializeGraphics();
     }
 
     protected override void Cleanup()
     {
         Log.Info($"Direct2DAppWindow '{Title}' cleaning up its resources...");
-
         CleanupGraphics();
     }
 
@@ -107,12 +105,12 @@ public abstract class Direct2DAppWindow : Win32Window
         try
         {
             renderTarget.BeginDraw();
+            // Clear with the designated background color (should be black for Mica)
             renderTarget.Clear(backgroundColor);
 
             var drawingContext = new DrawingContext(renderTarget, dwriteFactory, this);
 
             DrawUIContent(drawingContext);
-
 
             if (fpsTextBrush is not null && fpsTextFormat is not null)
             {
@@ -145,7 +143,6 @@ public abstract class Direct2DAppWindow : Win32Window
         catch (Exception ex)
         {
             Log.Error($"Rendering Error in RenderFrame for '{Title}': {ex}");
-
             graphicsInitialized = false;
             CleanupGraphics();
             InitializeGraphics();
@@ -163,12 +160,9 @@ public abstract class Direct2DAppWindow : Win32Window
             {
                 var newPixelSize = new SizeI(width, height);
 
-
                 CleanupDeviceSpecificResources();
 
-
                 renderTarget.Resize(newPixelSize);
-
 
                 RecreateDeviceSpecificResources();
 
@@ -197,7 +191,6 @@ public abstract class Direct2DAppWindow : Win32Window
         else if (!graphicsInitialized && Handle != nint.Zero && IsOpen && width > 0 && height > 0)
         {
             Log.Warning($"OnSize called for '{Title}' but graphics not initialized. Attempting initialization.");
-
             InitializeGraphics();
         }
         else if (width <= 0 || height <= 0)
@@ -206,14 +199,12 @@ public abstract class Direct2DAppWindow : Win32Window
         }
     }
 
-
     protected override void OnMouseMove(int x, int y) { }
     protected override void OnMouseDown(MouseButton button, int x, int y) { }
     protected override void OnMouseUp(MouseButton button, int x, int y) { }
     protected override void OnKeyDown(int keyCode) { }
     protected override void OnKeyUp(int keyCode) { }
     protected override void OnMouseWheel(short delta) { }
-
 
     protected virtual bool InitializeGraphics()
     {
@@ -228,19 +219,15 @@ public abstract class Direct2DAppWindow : Win32Window
 
         try
         {
-
             CleanupGraphics();
-
 
             Result factoryResult = D2D1.D2D1CreateFactory(D2DFactoryType.SingleThreaded, out d2dFactory);
             factoryResult.CheckError();
             if (d2dFactory is null) throw new InvalidOperationException($"D2D Factory creation failed silently for '{Title}'.");
 
-
             Result dwriteResult = DWrite.DWriteCreateFactory(DW.FactoryType.Shared, out dwriteFactory);
             dwriteResult.CheckError();
             if (dwriteFactory is null) throw new InvalidOperationException($"DWrite Factory creation failed silently for '{Title}'.");
-
 
             var clientRectSize = GetClientRectSize();
             if (clientRectSize.Width <= 0 || clientRectSize.Height <= 0)
@@ -250,7 +237,7 @@ public abstract class Direct2DAppWindow : Win32Window
                 return false;
             }
 
-
+            // Use Premultiplied alpha, which is generally compatible with DWM effects.
             var dxgiPixelFormat = new PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied);
             var renderTargetProperties = new RenderTargetProperties(dxgiPixelFormat);
             var hwndRenderTargetProperties = new HwndRenderTargetProperties
@@ -260,20 +247,15 @@ public abstract class Direct2DAppWindow : Win32Window
                 PresentOptions = PresentOptions.None
             };
 
-
             renderTarget = d2dFactory.CreateHwndRenderTarget(renderTargetProperties, hwndRenderTargetProperties);
             if (renderTarget is null) throw new InvalidOperationException($"Render target creation returned null unexpectedly for '{Title}'.");
 
-
             renderTarget.TextAntialiasMode = D2D.TextAntialiasMode.Cleartype;
-
 
             brushCache = new Dictionary<Color4, ID2D1SolidColorBrush>();
             textFormatCache = new Dictionary<string, IDWriteTextFormat>();
 
-
             RecreateDeviceSpecificResources();
-
 
             frameCountSinceUpdate = 0;
             currentFps = 0;
@@ -302,23 +284,19 @@ public abstract class Direct2DAppWindow : Win32Window
 
         try
         {
-
             fpsTextFormat?.Dispose();
             fpsTextFormat = dwriteFactory.CreateTextFormat(fpsFontName, null, FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, fpsFontSize, "en-us");
             fpsTextFormat.TextAlignment = DW.TextAlignment.Leading;
             fpsTextFormat.ParagraphAlignment = ParagraphAlignment.Near;
 
-
             fpsTextBrush?.Dispose();
             fpsTextBrush = renderTarget.CreateSolidColorBrush(fpsTextColor);
-
 
             Log.Info($"Recreated FPS drawing resources for '{Title}'.");
         }
         catch (Exception ex)
         {
             Log.Error($"Warning: Failed to recreate device-specific resources for '{Title}': {ex.Message}");
-
             CleanupDeviceSpecificResources();
         }
     }
@@ -327,7 +305,6 @@ public abstract class Direct2DAppWindow : Win32Window
     {
         fpsTextBrush?.Dispose(); fpsTextBrush = null;
         fpsTextFormat?.Dispose(); fpsTextFormat = null;
-
 
         foreach (var brush in brushCache.Values) brush?.Dispose();
         brushCache.Clear();
@@ -343,9 +320,7 @@ public abstract class Direct2DAppWindow : Win32Window
 
         fpsTimer.Stop();
 
-
         CleanupDeviceSpecificResources();
-
 
         renderTarget?.Dispose(); renderTarget = null;
         dwriteFactory?.Dispose(); dwriteFactory = null;
@@ -373,7 +348,6 @@ public abstract class Direct2DAppWindow : Win32Window
         return new SizeI(baseWidth, baseHeight);
     }
 
-
     public ID2D1SolidColorBrush? GetOrCreateBrush(Color4 color)
     {
         if (renderTarget is null)
@@ -382,14 +356,12 @@ public abstract class Direct2DAppWindow : Win32Window
             return null;
         }
 
-
         if (brushCache.TryGetValue(color, out ID2D1SolidColorBrush? brush) && brush is not null)
         {
             return brush;
         }
         else if (brushCache.ContainsKey(color))
         {
-
             brushCache.Remove(color);
         }
 
@@ -405,7 +377,6 @@ public abstract class Direct2DAppWindow : Win32Window
         catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
         {
             Log.Warning($"Recreate target detected in GetOrCreateBrush for color {color} on '{Title}'.");
-
             CleanupDeviceSpecificResources();
             return null;
         }
@@ -426,14 +397,12 @@ public abstract class Direct2DAppWindow : Win32Window
 
         string cacheKey = $"{style.FontName}_{style.FontSize}_{style.FontWeight}_{style.FontStyle}_{style.FontStretch}";
 
-
         if (textFormatCache.TryGetValue(cacheKey, out IDWriteTextFormat? format) && format is not null)
         {
             return format;
         }
         else if (textFormatCache.ContainsKey(cacheKey))
         {
-
             textFormatCache.Remove(cacheKey);
         }
 

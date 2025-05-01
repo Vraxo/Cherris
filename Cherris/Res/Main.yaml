@@ -1,5 +1,8 @@
 Node: MainScene::MainScene
 children:
-  - Node: VideoPlayer::VideoPlayer
-    FilePath: Res/Video.mp4
-    AutoPlay: true
+  - Node: ModalWindowNode::W
+    children:
+    - Node: VideoPlayer::VideoPlayer
+      Position: [100, 100]
+      FilePath: Res/Video.mp4
+      AutoPlay: true

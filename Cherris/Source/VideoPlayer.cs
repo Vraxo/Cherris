@@ -15,7 +15,6 @@ using System.Text; // Needed for Encoding
 using System.Linq; // Needed for Linq .All()
 using System.Collections.Generic; // Needed for List<string>
 
-
 namespace Cherris;
 
 // Inherit from Node2D to get position, size, visibility, etc.
@@ -125,7 +124,7 @@ public class VideoPlayer : Node2D, IDisposable
     }
 
     public bool IsPlaying => _mediaPlayer?.IsPlaying ?? false;
-    public float Position // 0.0 to 1.0
+    public float PositionRatio // 0.0 to 1.0
     {
         get => _mediaPlayer?.Position ?? 0f;
         set

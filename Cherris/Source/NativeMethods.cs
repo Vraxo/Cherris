@@ -3,17 +3,16 @@ using System.Runtime.InteropServices;
 
 namespace Cherris;
 
-internal static class NativeMethods
+public static class NativeMethods
 {
-
     public const uint CS_HREDRAW = 0x0002;
     public const uint CS_VREDRAW = 0x0001;
     public const uint CS_OWNDC = 0x0020;
 
     public const uint WS_OVERLAPPED = 0x00000000;
-    public const uint WS_CAPTION = 0x00C00000;     /* WS_BORDER | WS_DLGFRAME  */
+    public const uint WS_CAPTION = 0x00C00000;
     public const uint WS_SYSMENU = 0x00080000;
-    public const uint WS_THICKFRAME = 0x00040000; // For resizing
+    public const uint WS_THICKFRAME = 0x00040000;
     public const uint WS_MINIMIZEBOX = 0x00020000;
     public const uint WS_MAXIMIZEBOX = 0x00010000;
     public const uint WS_OVERLAPPEDWINDOW = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
@@ -46,7 +45,7 @@ internal static class NativeMethods
     public const int WM_QUIT = 0x0012;
     public const int WM_PARENTNOTIFY = 0x0210;
     public const int WM_ENTERIDLE = 0x0121;
-
+    public const int WM_DWMCOMPOSITIONCHANGED = 0x031E;
 
     public const int CW_USEDEFAULT = unchecked((int)0x80000000);
     public const int SW_SHOWNORMAL = 1;
@@ -54,7 +53,6 @@ internal static class NativeMethods
     public const int GWLP_USERDATA = -21;
     public const int GCLP_HBRBACKGROUND = -10;
     public const int GWL_STYLE = -16;
-
 
     public const int IDI_APPLICATION = 32512;
     public const int IDC_ARROW = 32512;
@@ -65,6 +63,21 @@ internal static class NativeMethods
 
     public const uint PM_REMOVE = 0x0001;
 
+    public enum DWMWINDOWATTRIBUTE
+    {
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20,
+        DWMWA_SYSTEMBACKDROP_TYPE = 38,
+        DWMWA_MICA_EFFECT = 1029
+    }
+
+    public enum DWMSBT
+    {
+        DWMSBT_AUTO = 0,
+        DWMSBT_NONE = 1,
+        DWMSBT_MAINWINDOW = 2,
+        DWMSBT_TRANSIENTWINDOW = 3,
+        DWMSBT_TABBEDWINDOW = 4
+    }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
     public struct WNDCLASSEX
@@ -129,9 +142,7 @@ internal static class NativeMethods
         public uint dwExStyle;
     }
 
-
     public delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     public static extern ushort RegisterClassEx([In] ref WNDCLASSEX lpwcx);
@@ -202,7 +213,6 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr lpIconName);
 
-
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
@@ -210,6 +220,13 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern IntPtr GetParent(IntPtr hWnd);
 
+    // Corrected signature: Takes ref int for enum/bool attributes
+    [DllImport("dwmapi.dll", SetLastError = true)]
+    public static extern int DwmSetWindowAttribute(IntPtr hwnd, DWMWINDOWATTRIBUTE dwAttribute, ref int pvAttribute, int cbAttribute);
+
+    // Removed the incorrect overload taking ref DWMSBT
+    // [DllImport("dwmapi.dll", SetLastError = true)]
+    // public static extern int DwmSetWindowAttribute(IntPtr hwnd, DWMWINDOWATTRIBUTE dwAttribute, ref DWMSBT pvAttribute, int cbAttribute);
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
@@ -238,7 +255,6 @@ internal static class NativeMethods
         else
             return GetWindowLong32(hWnd, nIndex);
     }
-
 
     public static int GET_X_LPARAM(IntPtr lParam) => LOWORD(lParam);
     public static int GET_Y_LPARAM(IntPtr lParam) => HIWORD(lParam);

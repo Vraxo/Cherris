@@ -3744,7 +3744,7 @@ public static class PackedSceneUtils
 
         for (var i = 0; i < pathParts.Length; i++)
         {
-            var memberInfo = GetMemberInfo(currentObject.GetType(), pathParts[i]);
+            var memberInfo = GetMemberInfo(currentObject.GetType(), pathParts[i]); // Use the potentially ambiguous MemberInfo
             var isFinalSegment = i == pathParts.Length - 1;
 
             if (isFinalSegment)
@@ -3758,15 +3758,51 @@ public static class PackedSceneUtils
         }
     }
 
+    // MODIFIED: Added logging to detect ambiguity source.
     private static MemberInfo GetMemberInfo(Type type, string memberName)
     {
-        var property = type.GetProperty(memberName, MemberBindingFlags);
-        if (property != null) return property;
+        // Find all potentially matching members first for diagnostics
+        var allMembers = type.GetMember(memberName, MemberBindingFlags);
 
-        var field = type.GetField(memberName, MemberBindingFlags);
-        if (field != null) return field;
+        if (allMembers.Length == 0)
+        {
+            throw new InvalidOperationException($"Member '{memberName}' not found on type '{type.Name}'");
+        }
 
-        throw new InvalidOperationException($"Member '{memberName}' not found on type '{type.Name}'");
+        if (allMembers.Length > 1)
+        {
+            // Log detailed information about the ambiguous members found
+            Log.Error($"[GetMemberInfo] Ambiguity detected for member '{memberName}' on type '{type.Name}'. Found {allMembers.Length} members:");
+            foreach (var m in allMembers)
+            {
+                string memberTypeName = m switch { PropertyInfo p => p.PropertyType.Name, FieldInfo f => f.FieldType.Name, _ => m.MemberType.ToString() };
+                Log.Error($"  - Name: {m.Name}, Kind: {m.MemberType}, Type: {memberTypeName}, Declared by: {m.DeclaringType?.FullName}");
+            }
+
+            // Even if GetMember finds multiple, GetProperty/GetField might resolve it based on C# rules.
+            // Let's try them first.
+            var property = type.GetProperty(memberName, MemberBindingFlags);
+            if (property != null)
+            {
+                Log.Info($"[GetMemberInfo] Ambiguity resolved by GetProperty for '{memberName}' on '{type.Name}'. Using property declared by {property.DeclaringType?.FullName}.");
+                return property;
+            }
+
+            var field = type.GetField(memberName, MemberBindingFlags);
+            if (field != null)
+            {
+                Log.Info($"[GetMemberInfo] Ambiguity resolved by GetField for '{memberName}' on '{type.Name}'. Using field declared by {field.DeclaringType?.FullName}.");
+                return field;
+            }
+
+            // If GetProperty/GetField couldn't resolve, the ambiguity is real for reflection's typical use.
+            // Throw the standard exception. The logs above provide context.
+            Log.Error($"[GetMemberInfo] Could not resolve ambiguity for '{memberName}' using GetProperty/GetField despite GetMember finding multiple matches.");
+            throw new AmbiguousMatchException($"Ambiguous match found for member '{memberName}' on type '{type.Name}'. See previous log messages for details.");
+        }
+
+        // Exactly one member found by GetMember
+        return allMembers[0];
     }
 
     private static void HandleFinalSegment(object rootTarget, string memberPath, object currentObject,
@@ -3776,7 +3812,7 @@ public static class PackedSceneUtils
         {
             PropertyInfo p => p.PropertyType,
             FieldInfo f => f.FieldType,
-            _ => throw new InvalidOperationException("Unsupported member type")
+            _ => throw new InvalidOperationException($"Unsupported member type '{memberInfo?.GetType().Name}' for member '{memberInfo?.Name}'")
         };
 
         if (ShouldDeferAssignment(memberType, value))
@@ -3808,7 +3844,7 @@ public static class PackedSceneUtils
         {
             PropertyInfo p => p.PropertyType,
             FieldInfo f => f.FieldType,
-            _ => throw new InvalidOperationException("Unsupported member type")
+            _ => throw new InvalidOperationException($"Unsupported member type '{memberInfo?.GetType().Name}' for member '{memberInfo?.Name}'")
         }) ?? throw new InvalidOperationException("Failed to create instance");
 
     private static object? GetMemberValue(object target, MemberInfo memberInfo)
@@ -3817,7 +3853,7 @@ public static class PackedSceneUtils
         {
             PropertyInfo p => p.GetValue(target),
             FieldInfo f => f.GetValue(target),
-            _ => throw new InvalidOperationException("Unsupported member type")
+            _ => throw new InvalidOperationException($"Unsupported member type '{memberInfo?.GetType().Name}' for member '{memberInfo?.Name}'")
         };
     }
 
@@ -3826,23 +3862,38 @@ public static class PackedSceneUtils
         switch (memberInfo)
         {
             case PropertyInfo p:
-                p.SetValue(target, value);
+                try { p.SetValue(target, value); } catch (Exception ex) { Log.Error($"Failed setting property '{p.Name}' on '{target.GetType().Name}': {ex.Message}"); throw; }
                 break;
             case FieldInfo f:
-                f.SetValue(target, value);
+                try { f.SetValue(target, value); } catch (Exception ex) { Log.Error($"Failed setting field '{f.Name}' on '{target.GetType().Name}': {ex.Message}"); throw; }
                 break;
             default:
-                throw new InvalidOperationException("Unsupported member type");
+                throw new InvalidOperationException($"Unsupported member type '{memberInfo?.GetType().Name}' for member '{memberInfo?.Name}'");
         }
     }
 
     public static Type ResolveType(string typeName)
     {
-        return AppDomain.CurrentDomain.GetAssemblies()
-            .Select(assembly => assembly.GetType(typeName, false) ?? assembly.GetType($"{assembly.GetName().Name}.{typeName}", false))
-            .FirstOrDefault(type => type != null)
-            ?? throw new TypeLoadException($"Type '{typeName}' not found");
+        // Adjusted to handle potential namespace differences
+        Type? foundType = null;
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            // Try direct lookup first
+            foundType = assembly.GetType(typeName, false);
+            if (foundType != null) break;
+
+            // Try prepending common namespace if not fully qualified
+            if (!typeName.Contains('.'))
+            {
+                foundType = assembly.GetType($"Cherris.{typeName}", false);
+                if (foundType != null) break;
+            }
+            // Add other potential namespaces if needed
+        }
+
+        return foundType ?? throw new TypeLoadException($"Type '{typeName}' not found in any loaded assembly.");
     }
+
 
     public static object ConvertValue(Type targetType, object value)
     {
@@ -3862,7 +3913,7 @@ public static class PackedSceneUtils
         foreach (var (key, value) in dict)
         {
             string memberName = key.ToString() ?? throw new InvalidDataException("Dictionary key cannot be null");
-            MemberInfo memberInfo = GetMemberInfo(targetType, memberName);
+            MemberInfo memberInfo = GetMemberInfo(targetType, memberName); // Use modified GetMemberInfo
 
             var convertedValue = ConvertValue(GetMemberType(memberInfo), value);
             SetMemberValue(instance, memberInfo, convertedValue);
@@ -3876,7 +3927,7 @@ public static class PackedSceneUtils
         {
             PropertyInfo p => p.PropertyType,
             FieldInfo f => f.FieldType,
-            _ => throw new InvalidOperationException("Unsupported member type")
+            _ => throw new InvalidOperationException($"Unsupported member type '{memberInfo?.GetType().Name}' for member '{memberInfo?.Name}'")
         };
 
     private static object ConvertList(Type targetType, IList list)
@@ -3884,74 +3935,152 @@ public static class PackedSceneUtils
         if (targetType == typeof(List<int>))
             return list.Cast<object>().Select(Convert.ToInt32).ToList();
 
-        return targetType.Name switch
+        // Use typeof comparisons for clarity and robustness
+        if (targetType == typeof(Vector2)) return ParseVector2(list);
+        if (targetType == typeof(Color)) return ParseColor(list); // Assuming Color is Vortice.Mathematics.Color4
+
+        // Fallback or error for other list types
+        // This might need expansion if you serialize other list types like List<string>, etc.
+        try
         {
-            nameof(Vector2) => ParseVector2(list),
-            nameof(Color) => ParseColor(list),
-            _ => throw new NotSupportedException($"Unsupported list conversion to {targetType}")
-        };
+            // Attempt generic list conversion if applicable (e.g., List<float>)
+            if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(List<>))
+            {
+                var itemType = targetType.GetGenericArguments()[0];
+                var genericList = (IList)Activator.CreateInstance(targetType)!;
+                foreach (var item in list)
+                {
+                    genericList.Add(Convert.ChangeType(item, itemType));
+                }
+                return genericList;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Error during generic list conversion for type {targetType}: {ex.Message}");
+        }
+
+
+        throw new NotSupportedException($"Unsupported list conversion to type {targetType}");
     }
+
 
     private static object ConvertPrimitive(Type targetType, object value)
     {
-        string stringValue = value.ToString()?.TrimQuotes()
-            ?? throw new InvalidOperationException("Value cannot be null");
+        string stringValue = value?.ToString()?.TrimQuotes()
+            ?? ""; // Handle null value case
+
+        if (string.IsNullOrEmpty(stringValue) && targetType != typeof(string) && Nullable.GetUnderlyingType(targetType) == null)
+        {
+            // Handle empty strings trying to be parsed as non-string, non-nullable types if necessary
+            // For now, let downstream parsing handle errors, but could add specific checks here.
+            // Example: return default(T) if T is targetType, but that's complex.
+        }
 
         if (targetType.IsEnum)
         {
-            return Enum.Parse(targetType, stringValue);
+            try { return Enum.Parse(targetType, stringValue, true); } // Use case-insensitive parsing
+            catch (Exception ex) { throw new InvalidOperationException($"Failed to parse enum '{targetType.Name}' from value '{stringValue}'.", ex); }
         }
 
-        return targetType switch
+        // Use TypeCode for efficient primitive conversions where possible
+        TypeCode typeCode = Type.GetTypeCode(targetType);
+        try
         {
-            _ when targetType == typeof(int)         => int.Parse(stringValue),
-            _ when targetType == typeof(uint)        => uint.Parse(stringValue),
-            _ when targetType == typeof(float)       => float.Parse(stringValue),
-            _ when targetType == typeof(double)      => double.Parse(stringValue),
-            _ when targetType == typeof(bool)        => bool.Parse(stringValue),
-            _ when targetType == typeof(string)      => stringValue,
-            //_ when targetType == typeof(AudioStream) => AudioStream.Load(stringValue)!,
-            _ when targetType == typeof(AudioStream) => ResourceLoader.Load<AudioStream>(stringValue)!,
-            _ when targetType == typeof(Sound)       => ResourceLoader.Load<Sound>(stringValue),
-            _ when targetType == typeof(Animation)   => ResourceLoader.Load<Animation>(stringValue),
-            _ when targetType == typeof(Texture)     => ResourceLoader.Load<Texture>(stringValue),
-            _ when targetType == typeof(Font)        => ResourceLoader.Load<Font>(stringValue),
-            _ => throw new NotSupportedException($"Unsupported type: {targetType.Name}")
-        };
+            switch (typeCode)
+            {
+                case TypeCode.Int32: return int.Parse(stringValue);
+                case TypeCode.UInt32: return uint.Parse(stringValue);
+                case TypeCode.Single: return float.Parse(stringValue, System.Globalization.CultureInfo.InvariantCulture); // Use InvariantCulture for floats
+                case TypeCode.Double: return double.Parse(stringValue, System.Globalization.CultureInfo.InvariantCulture);
+                case TypeCode.Boolean: return bool.Parse(stringValue);
+                case TypeCode.String: return stringValue; // Already a string
+                                                          // Add other TypeCodes if needed (Int16, Byte, Decimal, DateTime, etc.)
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Failed to convert primitive value '{stringValue}' to type {targetType.Name}.", ex);
+        }
+
+        // Handle non-primitive types resolved by ResourceLoader or specific classes
+        if (targetType == typeof(AudioStream)) return ResourceLoader.Load<AudioStream>(stringValue)!;
+        if (targetType == typeof(Sound)) return ResourceLoader.Load<Sound>(stringValue)!;
+        if (targetType == typeof(Animation)) return ResourceLoader.Load<Animation>(stringValue)!;
+        if (targetType == typeof(Texture)) return ResourceLoader.Load<Texture>(stringValue)!;
+        if (targetType == typeof(Font)) return ResourceLoader.Load<Font>(stringValue)!;
+        // Consider PackedScene type for nested scenes?
+        // if (targetType == typeof(PackedScene)) return new PackedScene(stringValue);
+
+        // If no specific handler, attempt ChangeType as a last resort
+        try
+        {
+            return Convert.ChangeType(stringValue, targetType, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (Exception ex)
+        {
+            throw new NotSupportedException($"Unsupported primitive/resource type conversion from '{value?.GetType().Name ?? "null"}' to '{targetType.Name}' for value '{stringValue}'.", ex);
+        }
     }
 
     private static Vector2 ParseVector2(IList list)
     {
-        if (list.Count != 2) 
-        { 
-            throw new ArgumentException("Vector2 requires exactly 2 elements");
+        if (list.Count != 2)
+        {
+            throw new ArgumentException($"Vector2 requires exactly 2 elements, got {list.Count}");
         }
 
-        return new(
-            Convert.ToSingle(list[0]),
-            Convert.ToSingle(list[1])
-        );
+        try
+        {
+            return new(
+                Convert.ToSingle(list[0], System.Globalization.CultureInfo.InvariantCulture),
+                Convert.ToSingle(list[1], System.Globalization.CultureInfo.InvariantCulture)
+            );
+        }
+        catch (Exception ex) { throw new ArgumentException($"Failed to parse Vector2 elements: {ex.Message}", ex); }
     }
 
+    // Updated to match Vortice.Mathematics.Color4 (float components 0-1)
     private static Color ParseColor(IList list)
     {
         if (list.Count < 3 || list.Count > 4)
         {
-            throw new ArgumentException("Color requires 3 or 4 elements");
+            throw new ArgumentException($"Color4 requires 3 or 4 elements (R, G, B, [A]), got {list.Count}");
         }
 
-        return new(
-            Convert.ToByte(list[0]),
-            Convert.ToByte(list[1]),
-            Convert.ToByte(list[2]),
-            list.Count > 3 ? Convert.ToByte(list[3]) : (byte)255
-        );
+        try
+        {
+            // Assume values are 0-255 bytes if integers, or 0-1 floats if floating point
+            // Convert to float 0-1 range needed by Color4
+            float r = ConvertToFloatColor(list[0]);
+            float g = ConvertToFloatColor(list[1]);
+            float b = ConvertToFloatColor(list[2]);
+            float a = list.Count > 3 ? ConvertToFloatColor(list[3]) : 1.0f; // Default alpha to 1.0f
+
+            return new Color(r, g, b, a);
+        }
+        catch (Exception ex) { throw new ArgumentException($"Failed to parse Color4 elements: {ex.Message}", ex); }
     }
 
+    // Helper to convert object (likely int/byte or float/double) to float 0-1
+    private static float ConvertToFloatColor(object component)
+    {
+        float value = Convert.ToSingle(component, System.Globalization.CultureInfo.InvariantCulture);
+        // If value seems to be in 0-255 range, normalize it. Otherwise, assume it's already 0-1.
+        // This is heuristic - might need adjustment based on typical YAML values.
+        if (value > 1.0f && value <= 255.0f)
+        {
+            return value / 255.0f;
+        }
+        // Clamp to valid range
+        return Math.Clamp(value, 0.0f, 1.0f);
+    }
+
+
     private static string TrimQuotes(this string input)
-        => input.Length >= 2 && (input[0] == '"' || input[0] == '\'')
+        => input != null && input.Length >= 2 && ((input[0] == '"' && input[^1] == '"') || (input[0] == '\'' && input[^1] == '\''))
             ? input[1..^1]
-            : input;
+            : input ?? ""; // Return empty if input is null
 }
 </file>
 
@@ -4488,6 +4617,8 @@ public enum VAlignment
 </file>
 
 <file path="VideoPlayer.cs">
+// MODIFIED: VideoPlayer.cs
+// Summary: Changed VideoFormatCallback to *force* BGRA32 (RV32) format by calculating the expected pitch/lines and updating the reference parameters passed by LibVLC. This aims to satisfy the format setup requirement immediately, even if the initial call has zero pitch/lines.
 using System;
 using System.IO;
 using System.Runtime.InteropServices; // Needed for Marshal
@@ -4502,7 +4633,6 @@ using SharpGen.Runtime; // For SharpGenException
 using System.Text; // Needed for Encoding
 using System.Linq; // Needed for Linq .All()
 using System.Collections.Generic; // Needed for List<string>
-
 
 namespace Cherris;
 
@@ -4528,6 +4658,7 @@ public class VideoPlayer : Node2D, IDisposable
     private uint _videoWidth = 0;
     private uint _videoHeight = 0;
     private bool _newFrameAvailable = false;
+    private bool _formatConfigured = false; // Flag to track if valid format received
 
     // Variables to store the format received from LibVLC
     private uint _receivedChroma = 0;
@@ -4577,6 +4708,7 @@ public class VideoPlayer : Node2D, IDisposable
                 _latestFrameDataRaw = null;
                 _conversionBufferBGRA32 = null;
                 _newFrameAvailable = false;
+                _formatConfigured = false;
             }
         }
     }
@@ -4611,7 +4743,7 @@ public class VideoPlayer : Node2D, IDisposable
     }
 
     public bool IsPlaying => _mediaPlayer?.IsPlaying ?? false;
-    public float Position // 0.0 to 1.0
+    public float PositionRatio // 0.0 to 1.0
     {
         get => _mediaPlayer?.Position ?? 0f;
         set
@@ -4764,17 +4896,23 @@ public class VideoPlayer : Node2D, IDisposable
     // --- LibVLC Callbacks ---
 
     // Called by LibVLC to negotiate the video format.
+    // We will *force* BGRA32 (RV32) format here because that's what Direct2D needs.
+    // LibVLC might still deliver frames in a different format via Lock/Unlock/Display,
+    // but this setup callback needs to succeed for the pipeline to start.
+
     private uint VideoFormatCallback(ref System.IntPtr opaque, System.IntPtr chroma, ref uint width, ref uint height, ref uint pitches, ref uint lines)
     {
+        // This callback might be called multiple times.
+        // We need valid width, height, *and* pitches/lines to fully configure.
         uint currentChromaInt = 0;
         try
         {
             if (IntPtr.Size == 4) currentChromaInt = (uint)chroma.ToInt32();
             else currentChromaInt = (uint)chroma.ToInt64();
         }
-        catch (OverflowException)
+        catch (OverflowException ex)
         {
-            Log.Error("VideoFormatCallback: Chroma IntPtr value overflows uint32.");
+            Log.Error($"VideoFormatCallback: Chroma IntPtr value overflows uint32. {ex.Message}");
             return 0; // Cannot process
         }
 
@@ -4782,62 +4920,59 @@ public class VideoPlayer : Node2D, IDisposable
 
         Log.Info($"VideoFormatCallback: Received Format='{currentChromaStr}' (0x{currentChromaInt:X8}), Dimensions={width}x{height}, Pitch={pitches}, Lines={lines}");
 
-        // *** Reject if parameters are invalid (zero) ***
-        if (width == 0 || height == 0 || pitches == 0 || lines == 0)
+        // *** Reject if dimensions are fundamentally invalid ***
+        if (width == 0 || height == 0)
         {
-            Log.Error($"VideoFormatCallback: Rejecting format due to invalid dimensions/pitch/lines (W:{width}, H:{height}, P:{pitches}, L:{lines}).");
+            Log.Error($"VideoFormatCallback: Rejecting format due to invalid dimensions (W:{width}, H:{height}).");
             // Reset state if we previously had valid info
             lock (_frameLock)
             {
-                if (_videoWidth != 0 || _videoHeight != 0)
-                {
-                    _videoBitmap?.Dispose(); _videoBitmap = null;
-                    _latestFrameDataRaw = null; _conversionBufferBGRA32 = null;
-                    _newFrameAvailable = false; _videoWidth = 0; _videoHeight = 0;
-                    _receivedChroma = 0; _receivedPitch = 0; _bufferSize = 0;
-                }
+                ResetFormatState_Locked();
             }
             return 0; // Indicate failure
         }
 
-        // *** Accept the received format if parameters are valid ***
+        // *** Force BGRA32 (RV32) format for Direct2D compatibility ***
+        uint targetChroma = FourCC_RV32;
+        uint targetPitch = width * 4; // BGRA = 4 bytes per pixel
+        uint targetLines = height;
+        string targetChromaStr = FourCCToString(targetChroma);
+
         lock (_frameLock)
         {
-            bool formatChanged = (_receivedChroma != currentChromaInt || _videoWidth != width || _videoHeight != height);
+            // Check if anything crucial changed OR if we haven't configured yet
+            bool dimensionsChanged = (_videoWidth != width || _videoHeight != height);
+            // We are forcing RV32, so we don't check _receivedChroma vs targetChroma for change here
 
-            if (formatChanged)
+            if (dimensionsChanged || !_formatConfigured)
             {
-                Log.Info($"Video format/dimensions changed: {_videoWidth}x{_videoHeight} (Chroma: {FourCCToString(_receivedChroma)}) -> {width}x{height} (Chroma: {currentChromaStr})");
+                Log.Info($"VideoFormatCallback: Configuring/Updating format - Size: {width}x{height}. Forcing Chroma: {targetChromaStr}, Pitch: {targetPitch}, Lines: {targetLines}. Previously Configured: {_formatConfigured}");
 
-                _videoBitmap?.Dispose(); _videoBitmap = null;
-                _latestFrameDataRaw = null; _conversionBufferBGRA32 = null;
-                _newFrameAvailable = false;
+                // Clear potentially outdated resources if dimensions changed
+                if (dimensionsChanged)
+                {
+                    _videoBitmap?.Dispose(); _videoBitmap = null;
+                    _latestFrameDataRaw = null; _conversionBufferBGRA32 = null;
+                    _newFrameAvailable = false;
+                }
 
-                _receivedChroma = currentChromaInt;
+                // Store the *target* format details
+                _receivedChroma = targetChroma; // Store what we requested
                 _videoWidth = width;
                 _videoHeight = height;
-                _receivedPitch = pitches;
-                // Calculate buffer size safely
-                if (pitches > 0 && lines > 0 && pitches < (uint.MaxValue / lines))
-                {
-                    _bufferSize = pitches * lines;
-                    Log.Info($"Calculated buffer size: {_bufferSize} bytes ({pitches} pitch * {lines} lines)");
-                }
-                else
-                {
-                    Log.Error($"Invalid pitch ({pitches}) or lines ({lines}) despite initial check. Resetting buffer size.");
-                    _bufferSize = 0;
-                    return 0; // Should not happen based on check above, but safeguard
-                }
+                _receivedPitch = targetPitch; // Store calculated pitch for BGRA32
+                _bufferSize = targetPitch * targetLines; // Calculate buffer size for BGRA32
+
+                _formatConfigured = true; // Mark as successfully configured
+                Log.Info($"Calculated buffer size for forced BGRA32: {_bufferSize} bytes");
             }
-            else
-            {
-                // Format is the same, update pitch/lines just in case
-                _receivedPitch = pitches;
-                _bufferSize = pitches * lines;
-            }
+            // Update the parameters passed by reference to tell LibVLC we want RV32
+            Marshal.WriteInt32(chroma, (int)targetChroma); // Write the FourCC code
+            pitches = targetPitch;
+            lines = targetLines;
         }
-        return lines; // Indicate success
+
+        return targetLines; // Return the height (number of lines) to indicate success
     }
 
 
@@ -4852,10 +4987,10 @@ public class VideoPlayer : Node2D, IDisposable
     {
         lock (_frameLock)
         {
-            // Check if format setup was successful and buffer size is valid
-            if (_bufferSize == 0 || _videoWidth == 0 || _videoHeight == 0)
+            // Check if format is FULLY configured (valid pitch/lines received)
+            if (!_formatConfigured || _bufferSize == 0 || _receivedPitch == 0)
             {
-                Log.Warning($"VideoLockCallback: Cannot lock, buffer size ({_bufferSize}) or dimensions ({_videoWidth}x{_videoHeight}) are invalid.");
+                Log.Warning($"VideoLockCallback: Cannot lock, format not fully configured yet (Configured={_formatConfigured}, Size={_bufferSize}, Pitch={_receivedPitch}).");
                 return System.IntPtr.Zero;
             }
 
@@ -4871,7 +5006,7 @@ public class VideoPlayer : Node2D, IDisposable
                 {
                     Log.Error($"VideoLockCallback: Exception allocating raw buffer of size {_bufferSize}. {ex.Message}");
                     _latestFrameDataRaw = null;
-                    _bufferSize = 0; // Mark buffer size as invalid again
+                    ResetFormatState_Locked(); // Mark format as unconfigured
                     return System.IntPtr.Zero;
                 }
             }
@@ -4959,6 +5094,7 @@ public class VideoPlayer : Node2D, IDisposable
             _receivedChroma = 0; _receivedPitch = 0; _bufferSize = 0;
             _newFrameAvailable = false;
             Log.Info($"Cleared previous media state for node '{Name}'.");
+            _formatConfigured = false;
         }
 
 
@@ -4983,6 +5119,8 @@ public class VideoPlayer : Node2D, IDisposable
             PlaybackError?.Invoke(this, $"Error loading media: {ex.Message}");
             _media?.Dispose(); _media = null;
         }
+        // Reset format flag on new media load
+        lock (_frameLock) { _formatConfigured = false; }
     }
 
 
@@ -5034,7 +5172,8 @@ public class VideoPlayer : Node2D, IDisposable
             currentPitch = _receivedPitch;   // Get the pitch for the raw data
             isNewFrameAvailableInLock = _newFrameAvailable;
 
-            // Check if D2D BGRA bitmap needs recreation (size changed)
+            // Check if D2D BGRA bitmap needs recreation (size changed OR format wasn't configured before)
+            // Only attempt recreation if the format IS configured now.
             if ((_videoBitmap == null || _videoBitmap.PixelSize.Width != currentWidth || _videoBitmap.PixelSize.Height != currentHeight)
                 && currentWidth > 0 && currentHeight > 0)
             {
@@ -5042,7 +5181,8 @@ public class VideoPlayer : Node2D, IDisposable
             }
 
             // Check if a new frame needs processing (conversion/copy)
-            if (isNewFrameAvailableInLock && _videoBitmap != null && _latestFrameDataRaw != null && currentChroma != 0)
+            // Can only process if format is configured AND bitmap exists AND raw data exists
+            if (isNewFrameAvailableInLock && _formatConfigured && _videoBitmap != null && _latestFrameDataRaw != null && currentChroma != 0)
             {
                 // Only process if bitmap dimensions match current video dimensions
                 if (_videoBitmap.PixelSize.Width == currentWidth && _videoBitmap.PixelSize.Height == currentHeight)
@@ -5051,6 +5191,7 @@ public class VideoPlayer : Node2D, IDisposable
                 }
                 else // Mismatch, force recreation instead
                 {
+                    Log.Warning($"Draw: Bitmap dimensions ({_videoBitmap?.PixelSize.Width}x{_videoBitmap?.PixelSize.Height}) mismatch current video dimensions ({currentWidth}x{currentHeight}). Forcing recreation.");
                     if (currentWidth > 0 && currentHeight > 0)
                     {
                         bitmapNeedsRecreation = true; // Force recreation
@@ -5067,7 +5208,14 @@ public class VideoPlayer : Node2D, IDisposable
             lock (_frameLock) { oldBitmap = _videoBitmap; _videoBitmap = null; }
             oldBitmap?.Dispose();
 
-            if (currentWidth == 0 || currentHeight == 0) { Log.Warning("Draw: Cannot recreate bitmap with zero dimensions."); return; }
+            // Double-check dimensions and configured status before creating
+            lock (_frameLock)
+            {
+                if (!_formatConfigured || _videoWidth == 0 || _videoHeight == 0)
+                {
+                    Log.Warning($"Draw: Cannot recreate bitmap. Format Configured: {_formatConfigured}, Dimensions: {_videoWidth}x{_videoHeight}."); return;
+                }
+            }
 
             try
             {
@@ -5081,12 +5229,13 @@ public class VideoPlayer : Node2D, IDisposable
                 // Check if the pending frame can be processed *now* after recreation
                 lock (_frameLock)
                 {
-                    if (isNewFrameAvailableInLock && _latestFrameDataRaw != null && currentChroma != 0 &&
+                    // Re-check all conditions
+                    if (_formatConfigured && isNewFrameAvailableInLock && _latestFrameDataRaw != null && currentChroma != 0 &&
                        _videoBitmap != null && _videoBitmap.PixelSize.Width == currentWidth && _videoBitmap.PixelSize.Height == currentHeight)
                     {
                         frameNeedsProcessing = true; // Process frame now
                     }
-                    else frameNeedsProcessing = false; // Still not ready
+                    else { frameNeedsProcessing = false; /*Log.Info("Draw: Frame processing not ready after bitmap recreation.");*/ }
                 }
             }
             catch (SharpGenException sgex) when (sgex.ResultCode.Code == Vortice.Direct2D1.ResultCode.RecreateTarget.Code)
@@ -5109,13 +5258,19 @@ public class VideoPlayer : Node2D, IDisposable
             lock (_frameLock)
             {
                 // Re-check all conditions *inside* the lock
-                if (_videoBitmap != null && _latestFrameDataRaw != null && _newFrameAvailable && _receivedChroma != 0 &&
+                // Crucially, check _formatConfigured!
+                if (_formatConfigured && _videoBitmap != null && _latestFrameDataRaw != null && _newFrameAvailable && _receivedChroma != 0 &&
                     _videoBitmap.PixelSize.Width == currentWidth && _videoBitmap.PixelSize.Height == currentHeight)
                 {
                     widthForUpdate = currentWidth;
                     heightForUpdate = currentHeight;
-                    chromaForUpdate = _receivedChroma;
-                    pitchForUpdate = _receivedPitch;
+                    // *** IMPORTANT: Use the CHROMA from the raw data buffer, NOT the one we forced (_receivedChroma) ***
+                    // This assumes the Lock/Unlock callback gives us the *actual* format being delivered.
+                    // If Lock/Unlock doesn't give format info, we might need another way or assume it matches our request.
+                    // For now, let's assume we need to handle the format delivered in rawData, whose chroma might be implicitly RV32 or RV24 etc.
+                    // We will use the _receivedChroma as the *assumed* format of the locked buffer for now.
+                    chromaForUpdate = _receivedChroma; // <-- Revisit this if Lock/Unlock gives explicit format info
+                    pitchForUpdate = _receivedPitch;   // Use the pitch associated with the buffer we locked (should match our forced pitch)
                     rawData = _latestFrameDataRaw;
                     bitmapForCopy = _videoBitmap;
 
@@ -5137,34 +5292,39 @@ public class VideoPlayer : Node2D, IDisposable
                 try
                 {
                     // *** FORMAT HANDLING ***
+                    // Here we process based on 'chromaForUpdate', which currently is assumed to be the RV32 we requested.
                     if (chromaForUpdate == FourCC_RV32) // BGRA32
                     {
                         uint expectedBgraPitch = widthForUpdate * 4;
                         if (pitchForUpdate == expectedBgraPitch)
                         {
+                            // Pitches match, direct copy
                             bitmapForCopy.CopyFromMemory(new Rectangle(0, 0, (int)widthForUpdate, (int)heightForUpdate), rawData, pitchForUpdate);
                             processedSuccessfully = true;
                         }
                         else
                         {
+                            // This case *shouldn't* happen if we forced RV32 with the correct pitch, but handle defensively.
                             Log.Warning($"RV32 pitch mismatch (Expected {expectedBgraPitch}, Got {pitchForUpdate}). Using intermediate buffer copy.");
                             CopyMemoryWithPitch(rawData, pitchForUpdate, bgraData, expectedBgraPitch, widthForUpdate * 4, heightForUpdate);
                             bitmapForCopy.CopyFromMemory(new Rectangle(0, 0, (int)widthForUpdate, (int)heightForUpdate), bgraData, expectedBgraPitch);
                             processedSuccessfully = true;
                         }
                     }
-                    else if (chromaForUpdate == FourCC_RV24) // BGR24
-                    {
-                        ConvertBGR24ToBGRA32(rawData, bgraData, widthForUpdate, heightForUpdate, pitchForUpdate);
-                        uint bgraPitch = widthForUpdate * 4;
-                        bitmapForCopy.CopyFromMemory(new Rectangle(0, 0, (int)widthForUpdate, (int)heightForUpdate), bgraData, bgraPitch);
-                        processedSuccessfully = true;
-                    }
-                    // *** Add other format handlers here (e.g., YUV) ***
-                    // else if (chromaForUpdate == FourCC_I420) { /* Convert I420 -> BGRA */ }
+                    // LibVLC might ignore our RV32 request and send something else like RV24.
+                    // We need to be prepared for this possibility if the above doesn't work.
+                    // For now, we assume RV32 is delivered if the setup succeeded.
+                    // else if (chromaForUpdate == FourCC_RV24) // BGR24 - Keep this conversion just in case
+                    // {
+                    //     ConvertBGR24ToBGRA32(rawData, bgraData, widthForUpdate, heightForUpdate, pitchForUpdate);
+                    //     uint bgraPitch = widthForUpdate * 4;
+                    //     bitmapForCopy.CopyFromMemory(new Rectangle(0, 0, (int)widthForUpdate, (int)heightForUpdate), bgraData, bgraPitch);
+                    //     processedSuccessfully = true;
+                    // }
                     else
                     {
-                        Log.Error($"Draw: Skipping frame processing. Unsupported video format received: {FourCCToString(chromaForUpdate)} (0x{chromaForUpdate:X8})");
+                        // This implies the format delivered doesn't match RV32, which we requested.
+                        Log.Error($"Draw: Skipping frame processing. Unexpected video format received in buffer (Expected RV32): {FourCCToString(chromaForUpdate)} (0x{chromaForUpdate:X8})");
                     }
 
                     if (processedSuccessfully)
@@ -5332,10 +5492,21 @@ public class VideoPlayer : Node2D, IDisposable
                 _conversionBufferBGRA32 = null; // Release conversion buffer
                 _newFrameAvailable = false; _videoWidth = 0; _videoHeight = 0; _receivedChroma = 0; _receivedPitch = 0; _bufferSize = 0;
             }
+            _formatConfigured = false; // Ensure flag is reset
             bitmapToDispose?.Dispose();
 
             Log.Info($"VideoPlayer '{Name}' disposed.");
         }
+    }
+
+    // Helper to reset format state variables under lock
+    private void ResetFormatState_Locked()
+    {
+        _videoBitmap?.Dispose(); _videoBitmap = null;
+        _latestFrameDataRaw = null; _conversionBufferBGRA32 = null;
+        _newFrameAvailable = false; _videoWidth = 0; _videoHeight = 0;
+        _receivedChroma = 0; _receivedPitch = 0; _bufferSize = 0;
+        _formatConfigured = false; // Mark as unconfigured
     }
     private void DisposeVlcResources() { Log.Warning($"DisposeVlcResources called directly for '{Name}'. Use Dispose()."); Dispose(true); }
     ~VideoPlayer() { Dispose(false); }
