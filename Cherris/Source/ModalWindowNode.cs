@@ -8,14 +8,10 @@ public class ModalWindowNode : WindowNode
 {
     private ModalSecondaryWindow? modalWindow;
 
-
     public override void Make()
     {
-
         InitializeModalWindow();
-
     }
-
 
     private void InitializeModalWindow()
     {
@@ -34,12 +30,8 @@ public class ModalWindowNode : WindowNode
 
         try
         {
-
             modalWindow = new ModalSecondaryWindow(Title, Width, Height, this, ownerHandle);
-
-
             this.secondaryWindow = modalWindow;
-
 
             if (!modalWindow.TryCreateWindow())
             {
@@ -48,6 +40,8 @@ public class ModalWindowNode : WindowNode
                 this.secondaryWindow = null;
                 return;
             }
+
+            modalWindow.BackdropType = this.BackdropType;
 
             if (!modalWindow.InitializeWindowAndGraphics())
             {
@@ -70,9 +64,6 @@ public class ModalWindowNode : WindowNode
         }
     }
 
-
-
-
     protected override void FreeInternal()
     {
         Log.Info($"Freeing ModalWindowNode '{Name}' and its associated modal window.");
@@ -80,30 +71,20 @@ public class ModalWindowNode : WindowNode
         modalWindow?.Close();
         modalWindow = null;
 
-
         this.secondaryWindow = null;
-
 
         base.FreeInternal();
     }
 
-
-
     public override void Process()
     {
-
-
         if (this.isQueuedForFree)
         {
             this.FreeInternal();
         }
         else
         {
-
-
             base.Process();
         }
     }
-
-
 }

@@ -16,12 +16,6 @@ public class SecondaryWindow : Direct2DAppWindow
         ApplicationCore.Instance.RegisterSecondaryWindow(this);
     }
 
-    protected override NativeMethods.DWMSBT GetSystemBackdropType()
-    {
-        // Acrylic is suitable for transient/secondary windows
-        return NativeMethods.DWMSBT.DWMSBT_TRANSIENTWINDOW;
-    }
-
     protected override void DrawUIContent(DrawingContext context)
     {
         ownerNode?.RenderChildren(context);

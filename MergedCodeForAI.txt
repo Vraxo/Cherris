@@ -1336,7 +1336,8 @@ public abstract class Direct2DAppWindow : Win32Window
     protected IDWriteFactory? dwriteFactory;
     protected ID2D1HwndRenderTarget? renderTarget;
 
-    protected Color4 backgroundColor = new(0.1f, 0.1f, 0.15f, 1.0f);
+    // Ensure background is black for best Mica compatibility
+    protected Color4 backgroundColor = Colors.Black;
     protected bool graphicsInitialized = false;
 
     private Stopwatch fpsTimer = new();
@@ -1350,7 +1351,6 @@ public abstract class Direct2DAppWindow : Win32Window
     private readonly string fpsFontName = "Consolas";
     private readonly float fpsFontSize = 14.0f;
 
-
     private Dictionary<Color4, ID2D1SolidColorBrush> brushCache = new();
     private Dictionary<string, IDWriteTextFormat> textFormatCache = new();
 
@@ -1361,14 +1361,12 @@ public abstract class Direct2DAppWindow : Win32Window
     protected override bool Initialize()
     {
         Log.Info($"Direct2DAppWindow '{Title}' initializing Vortice Graphics...");
-
         return InitializeGraphics();
     }
 
     protected override void Cleanup()
     {
         Log.Info($"Direct2DAppWindow '{Title}' cleaning up its resources...");
-
         CleanupGraphics();
     }
 
@@ -1415,12 +1413,12 @@ public abstract class Direct2DAppWindow : Win32Window
         try
         {
             renderTarget.BeginDraw();
+            // Clear with the designated background color (should be black for Mica)
             renderTarget.Clear(backgroundColor);
 
             var drawingContext = new DrawingContext(renderTarget, dwriteFactory, this);
 
             DrawUIContent(drawingContext);
-
 
             if (fpsTextBrush is not null && fpsTextFormat is not null)
             {
@@ -1453,7 +1451,6 @@ public abstract class Direct2DAppWindow : Win32Window
         catch (Exception ex)
         {
             Log.Error($"Rendering Error in RenderFrame for '{Title}': {ex}");
-
             graphicsInitialized = false;
             CleanupGraphics();
             InitializeGraphics();
@@ -1471,12 +1468,9 @@ public abstract class Direct2DAppWindow : Win32Window
             {
                 var newPixelSize = new SizeI(width, height);
 
-
                 CleanupDeviceSpecificResources();
 
-
                 renderTarget.Resize(newPixelSize);
-
 
                 RecreateDeviceSpecificResources();
 
@@ -1505,7 +1499,6 @@ public abstract class Direct2DAppWindow : Win32Window
         else if (!graphicsInitialized && Handle != nint.Zero && IsOpen && width > 0 && height > 0)
         {
             Log.Warning($"OnSize called for '{Title}' but graphics not initialized. Attempting initialization.");
-
             InitializeGraphics();
         }
         else if (width <= 0 || height <= 0)
@@ -1514,14 +1507,12 @@ public abstract class Direct2DAppWindow : Win32Window
         }
     }
 
-
     protected override void OnMouseMove(int x, int y) { }
     protected override void OnMouseDown(MouseButton button, int x, int y) { }
     protected override void OnMouseUp(MouseButton button, int x, int y) { }
     protected override void OnKeyDown(int keyCode) { }
     protected override void OnKeyUp(int keyCode) { }
     protected override void OnMouseWheel(short delta) { }
-
 
     protected virtual bool InitializeGraphics()
     {
@@ -1536,19 +1527,15 @@ public abstract class Direct2DAppWindow : Win32Window
 
         try
         {
-
             CleanupGraphics();
-
 
             Result factoryResult = D2D1.D2D1CreateFactory(D2DFactoryType.SingleThreaded, out d2dFactory);
             factoryResult.CheckError();
             if (d2dFactory is null) throw new InvalidOperationException($"D2D Factory creation failed silently for '{Title}'.");
 
-
             Result dwriteResult = DWrite.DWriteCreateFactory(DW.FactoryType.Shared, out dwriteFactory);
             dwriteResult.CheckError();
             if (dwriteFactory is null) throw new InvalidOperationException($"DWrite Factory creation failed silently for '{Title}'.");
-
 
             var clientRectSize = GetClientRectSize();
             if (clientRectSize.Width <= 0 || clientRectSize.Height <= 0)
@@ -1558,7 +1545,7 @@ public abstract class Direct2DAppWindow : Win32Window
                 return false;
             }
 
-
+            // Use Premultiplied alpha, which is generally compatible with DWM effects.
             var dxgiPixelFormat = new PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied);
             var renderTargetProperties = new RenderTargetProperties(dxgiPixelFormat);
             var hwndRenderTargetProperties = new HwndRenderTargetProperties
@@ -1568,20 +1555,15 @@ public abstract class Direct2DAppWindow : Win32Window
                 PresentOptions = PresentOptions.None
             };
 
-
             renderTarget = d2dFactory.CreateHwndRenderTarget(renderTargetProperties, hwndRenderTargetProperties);
             if (renderTarget is null) throw new InvalidOperationException($"Render target creation returned null unexpectedly for '{Title}'.");
 
-
             renderTarget.TextAntialiasMode = D2D.TextAntialiasMode.Cleartype;
-
 
             brushCache = new Dictionary<Color4, ID2D1SolidColorBrush>();
             textFormatCache = new Dictionary<string, IDWriteTextFormat>();
 
-
             RecreateDeviceSpecificResources();
-
 
             frameCountSinceUpdate = 0;
             currentFps = 0;
@@ -1610,23 +1592,19 @@ public abstract class Direct2DAppWindow : Win32Window
 
         try
         {
-
             fpsTextFormat?.Dispose();
             fpsTextFormat = dwriteFactory.CreateTextFormat(fpsFontName, null, FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, fpsFontSize, "en-us");
             fpsTextFormat.TextAlignment = DW.TextAlignment.Leading;
             fpsTextFormat.ParagraphAlignment = ParagraphAlignment.Near;
 
-
             fpsTextBrush?.Dispose();
             fpsTextBrush = renderTarget.CreateSolidColorBrush(fpsTextColor);
-
 
             Log.Info($"Recreated FPS drawing resources for '{Title}'.");
         }
         catch (Exception ex)
         {
             Log.Error($"Warning: Failed to recreate device-specific resources for '{Title}': {ex.Message}");
-
             CleanupDeviceSpecificResources();
         }
     }
@@ -1635,7 +1613,6 @@ public abstract class Direct2DAppWindow : Win32Window
     {
         fpsTextBrush?.Dispose(); fpsTextBrush = null;
         fpsTextFormat?.Dispose(); fpsTextFormat = null;
-
 
         foreach (var brush in brushCache.Values) brush?.Dispose();
         brushCache.Clear();
@@ -1651,9 +1628,7 @@ public abstract class Direct2DAppWindow : Win32Window
 
         fpsTimer.Stop();
 
-
         CleanupDeviceSpecificResources();
-
 
         renderTarget?.Dispose(); renderTarget = null;
         dwriteFactory?.Dispose(); dwriteFactory = null;
@@ -1681,7 +1656,6 @@ public abstract class Direct2DAppWindow : Win32Window
         return new SizeI(baseWidth, baseHeight);
     }
 
-
     public ID2D1SolidColorBrush? GetOrCreateBrush(Color4 color)
     {
         if (renderTarget is null)
@@ -1690,14 +1664,12 @@ public abstract class Direct2DAppWindow : Win32Window
             return null;
         }
 
-
         if (brushCache.TryGetValue(color, out ID2D1SolidColorBrush? brush) && brush is not null)
         {
             return brush;
         }
         else if (brushCache.ContainsKey(color))
         {
-
             brushCache.Remove(color);
         }
 
@@ -1713,7 +1685,6 @@ public abstract class Direct2DAppWindow : Win32Window
         catch (SharpGenException ex) when (ex.ResultCode.Code == D2D.ResultCode.RecreateTarget.Code)
         {
             Log.Warning($"Recreate target detected in GetOrCreateBrush for color {color} on '{Title}'.");
-
             CleanupDeviceSpecificResources();
             return null;
         }
@@ -1734,14 +1705,12 @@ public abstract class Direct2DAppWindow : Win32Window
 
         string cacheKey = $"{style.FontName}_{style.FontSize}_{style.FontWeight}_{style.FontStyle}_{style.FontStretch}";
 
-
         if (textFormatCache.TryGetValue(cacheKey, out IDWriteTextFormat? format) && format is not null)
         {
             return format;
         }
         else if (textFormatCache.ContainsKey(cacheKey))
         {
-
             textFormatCache.Remove(cacheKey);
         }
 
@@ -2373,8 +2342,6 @@ public class Log
 </file>
 
 <file path="MainAppWindow.cs">
-// No changes needed in MainAppWindow.cs regarding input handling
-// It already correctly updates the global Input state.
 using System;
 using Vortice.DirectWrite;
 using Vortice.Mathematics;
@@ -2385,17 +2352,32 @@ namespace Cherris;
 public class MainAppWindow : Direct2DAppWindow
 {
     public event Action? Closed;
+    private bool _firstDrawLogged = false; // Temporary for debugging
 
     public MainAppWindow(string title = "My DirectUI App", int width = 800, int height = 600)
         : base(title, width, height)
     {
-
         Input.SetupDefaultActions();
+    }
+
+    protected override NativeMethods.DWMSBT GetSystemBackdropType()
+    {
+        // Mica Alt is suitable for main application windows
+        return NativeMethods.DWMSBT.DWMSBT_MAINWINDOW;
     }
 
     protected override void DrawUIContent(DrawingContext context)
     {
+        // --- Temporary Debugging ---
+        if (!_firstDrawLogged)
+        {
+            Log.Info($"MainAppWindow.DrawUIContent called for '{Title}'. Rendering SceneTree.");
+            _firstDrawLogged = true;
+        }
+        // --- End Temporary Debugging ---
 
+        // If Mica doesn't appear, try commenting this line out temporarily
+        // to see if a pure black background shows the effect.
         SceneTree.Instance.RenderScene(context);
     }
 
@@ -2403,7 +2385,7 @@ public class MainAppWindow : Direct2DAppWindow
     {
         Log.Info("MainAppWindow OnClose called.");
         Closed?.Invoke();
-        return base.OnClose();
+        return base.OnClose(); // Let base handle decision (defaults to true)
     }
 
     protected override void Cleanup()
@@ -2413,57 +2395,54 @@ public class MainAppWindow : Direct2DAppWindow
         Log.Info("MainAppWindow Cleanup finished.");
     }
 
-
     protected override IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-
         int xPos = NativeMethods.GET_X_LPARAM(lParam);
         int yPos = NativeMethods.GET_Y_LPARAM(lParam);
         Vector2 mousePos = new Vector2(xPos, yPos);
-
 
         switch (msg)
         {
             case NativeMethods.WM_MOUSEMOVE:
                 Input.UpdateMousePosition(mousePos);
-                break;
+                return IntPtr.Zero; // Handled
 
             case NativeMethods.WM_LBUTTONDOWN:
                 Input.UpdateMouseButton(MouseButtonCode.Left, true);
-                break;
+                return IntPtr.Zero; // Handled
             case NativeMethods.WM_LBUTTONUP:
                 Input.UpdateMouseButton(MouseButtonCode.Left, false);
-                break;
+                return IntPtr.Zero; // Handled
 
             case NativeMethods.WM_RBUTTONDOWN:
                 Input.UpdateMouseButton(MouseButtonCode.Right, true);
-                break;
+                return IntPtr.Zero; // Handled
             case NativeMethods.WM_RBUTTONUP:
                 Input.UpdateMouseButton(MouseButtonCode.Right, false);
-                break;
+                return IntPtr.Zero; // Handled
 
             case NativeMethods.WM_MBUTTONDOWN:
                 Input.UpdateMouseButton(MouseButtonCode.Middle, true);
-                break;
+                return IntPtr.Zero; // Handled
             case NativeMethods.WM_MBUTTONUP:
                 Input.UpdateMouseButton(MouseButtonCode.Middle, false);
-                break;
+                return IntPtr.Zero; // Handled
 
             case NativeMethods.WM_XBUTTONDOWN:
                 int xButton1 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
                 if (xButton1 == NativeMethods.XBUTTON1) Input.UpdateMouseButton(MouseButtonCode.Side, true);
                 if (xButton1 == NativeMethods.XBUTTON2) Input.UpdateMouseButton(MouseButtonCode.Extra, true);
-                break;
+                return IntPtr.Zero; // Handled
             case NativeMethods.WM_XBUTTONUP:
                 int xButton2 = NativeMethods.GET_XBUTTON_WPARAM(wParam);
                 if (xButton2 == NativeMethods.XBUTTON1) Input.UpdateMouseButton(MouseButtonCode.Side, false);
                 if (xButton2 == NativeMethods.XBUTTON2) Input.UpdateMouseButton(MouseButtonCode.Extra, false);
-                break;
+                return IntPtr.Zero; // Handled
 
             case NativeMethods.WM_MOUSEWHEEL:
                 short wheelDelta = NativeMethods.GET_WHEEL_DELTA_WPARAM(wParam);
                 Input.UpdateMouseWheel((float)wheelDelta / NativeMethods.WHEEL_DELTA);
-                break;
+                return IntPtr.Zero; // Handled
 
             case NativeMethods.WM_KEYDOWN:
             case NativeMethods.WM_SYSKEYDOWN:
@@ -2472,7 +2451,8 @@ public class MainAppWindow : Direct2DAppWindow
                 {
                     Input.UpdateKey((KeyCode)vkCodeDown, true);
                 }
-                break;
+                // Let base handle ESC -> Close logic
+                return base.HandleMessage(hWnd, msg, wParam, lParam); // Allow potential base handling (like ESC)
 
             case NativeMethods.WM_KEYUP:
             case NativeMethods.WM_SYSKEYUP:
@@ -2481,10 +2461,10 @@ public class MainAppWindow : Direct2DAppWindow
                 {
                     Input.UpdateKey((KeyCode)vkCodeUp, false);
                 }
-                break;
+                return IntPtr.Zero; // Handled
         }
 
-
+        // Let base handle other messages (WM_PAINT, WM_SIZE, WM_CLOSE, WM_DESTROY etc.)
         return base.HandleMessage(hWnd, msg, wParam, lParam);
     }
 }
@@ -2690,17 +2670,16 @@ using System.Runtime.InteropServices;
 
 namespace Cherris;
 
-internal static class NativeMethods
+public static class NativeMethods
 {
-
     public const uint CS_HREDRAW = 0x0002;
     public const uint CS_VREDRAW = 0x0001;
     public const uint CS_OWNDC = 0x0020;
 
     public const uint WS_OVERLAPPED = 0x00000000;
-    public const uint WS_CAPTION = 0x00C00000;     /* WS_BORDER | WS_DLGFRAME  */
+    public const uint WS_CAPTION = 0x00C00000;
     public const uint WS_SYSMENU = 0x00080000;
-    public const uint WS_THICKFRAME = 0x00040000; // For resizing
+    public const uint WS_THICKFRAME = 0x00040000;
     public const uint WS_MINIMIZEBOX = 0x00020000;
     public const uint WS_MAXIMIZEBOX = 0x00010000;
     public const uint WS_OVERLAPPEDWINDOW = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
@@ -2733,7 +2712,7 @@ internal static class NativeMethods
     public const int WM_QUIT = 0x0012;
     public const int WM_PARENTNOTIFY = 0x0210;
     public const int WM_ENTERIDLE = 0x0121;
-
+    public const int WM_DWMCOMPOSITIONCHANGED = 0x031E;
 
     public const int CW_USEDEFAULT = unchecked((int)0x80000000);
     public const int SW_SHOWNORMAL = 1;
@@ -2741,7 +2720,6 @@ internal static class NativeMethods
     public const int GWLP_USERDATA = -21;
     public const int GCLP_HBRBACKGROUND = -10;
     public const int GWL_STYLE = -16;
-
 
     public const int IDI_APPLICATION = 32512;
     public const int IDC_ARROW = 32512;
@@ -2752,6 +2730,21 @@ internal static class NativeMethods
 
     public const uint PM_REMOVE = 0x0001;
 
+    public enum DWMWINDOWATTRIBUTE
+    {
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20,
+        DWMWA_SYSTEMBACKDROP_TYPE = 38,
+        DWMWA_MICA_EFFECT = 1029
+    }
+
+    public enum DWMSBT
+    {
+        DWMSBT_AUTO = 0,
+        DWMSBT_NONE = 1,
+        DWMSBT_MAINWINDOW = 2,
+        DWMSBT_TRANSIENTWINDOW = 3,
+        DWMSBT_TABBEDWINDOW = 4
+    }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
     public struct WNDCLASSEX
@@ -2816,9 +2809,7 @@ internal static class NativeMethods
         public uint dwExStyle;
     }
 
-
     public delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     public static extern ushort RegisterClassEx([In] ref WNDCLASSEX lpwcx);
@@ -2889,7 +2880,6 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr lpIconName);
 
-
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
@@ -2897,6 +2887,13 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern IntPtr GetParent(IntPtr hWnd);
 
+    // Corrected signature: Takes ref int for enum/bool attributes
+    [DllImport("dwmapi.dll", SetLastError = true)]
+    public static extern int DwmSetWindowAttribute(IntPtr hwnd, DWMWINDOWATTRIBUTE dwAttribute, ref int pvAttribute, int cbAttribute);
+
+    // Removed the incorrect overload taking ref DWMSBT
+    // [DllImport("dwmapi.dll", SetLastError = true)]
+    // public static extern int DwmSetWindowAttribute(IntPtr hwnd, DWMWINDOWATTRIBUTE dwAttribute, ref DWMSBT pvAttribute, int cbAttribute);
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
@@ -2925,7 +2922,6 @@ internal static class NativeMethods
         else
             return GetWindowLong32(hWnd, nIndex);
     }
-
 
     public static int GET_X_LPARAM(IntPtr lParam) => LOWORD(lParam);
     public static int GET_Y_LPARAM(IntPtr lParam) => HIWORD(lParam);
@@ -4282,7 +4278,6 @@ public class SecondaryWindow : Direct2DAppWindow
     private readonly WindowNode ownerNode;
     private Vector2 currentMousePosition = Vector2.Zero;
 
-
     public SecondaryWindow(string title, int width, int height, WindowNode owner)
         : base(title, width, height)
     {
@@ -4290,31 +4285,30 @@ public class SecondaryWindow : Direct2DAppWindow
         ApplicationCore.Instance.RegisterSecondaryWindow(this);
     }
 
+    protected override NativeMethods.DWMSBT GetSystemBackdropType()
+    {
+        // Acrylic is suitable for transient/secondary windows
+        return NativeMethods.DWMSBT.DWMSBT_TRANSIENTWINDOW;
+    }
+
     protected override void DrawUIContent(DrawingContext context)
     {
-
         ownerNode?.RenderChildren(context);
     }
 
     protected override bool OnClose()
     {
         Log.Info($"SecondaryWindow '{Title}' OnClose called.");
-
-
         ownerNode?.QueueFree();
-
-
         return base.OnClose();
     }
 
     protected override void Cleanup()
     {
         Log.Info($"SecondaryWindow '{Title}' Cleanup starting.");
-
         base.Cleanup();
         Log.Info($"SecondaryWindow '{Title}' Cleanup finished.");
     }
-
 
     protected override IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
@@ -4322,13 +4316,10 @@ public class SecondaryWindow : Direct2DAppWindow
         int yPos = NativeMethods.GET_Y_LPARAM(lParam);
         Vector2 mousePos = new Vector2(xPos, yPos);
 
-
         currentMousePosition = mousePos;
-
 
         switch (msg)
         {
-
             case NativeMethods.WM_LBUTTONDOWN:
                 Input.UpdateMouseButton(MouseButtonCode.Left, true);
                 break;
@@ -4385,13 +4376,10 @@ public class SecondaryWindow : Direct2DAppWindow
                 break;
         }
 
-
         return base.HandleMessage(hWnd, msg, wParam, lParam);
     }
 
-
     public Vector2 GetLocalMousePosition() => currentMousePosition;
-
 }
 </file>
 
@@ -5764,7 +5752,6 @@ public abstract class Win32Window : IDisposable
     public int Height { get; protected set; }
     public bool IsOpen { get; private set; } = false;
 
-
     protected Win32Window(string title, int width, int height, string className = null)
     {
         _windowTitle = title ?? "Win32 Window";
@@ -5774,7 +5761,6 @@ public abstract class Win32Window : IDisposable
         Height = _initialHeight;
         _windowClassName = className ?? ("Win32Window_" + Guid.NewGuid().ToString("N"));
         _wndProcDelegate = WindowProcedure;
-
     }
 
     public virtual bool TryCreateWindow(IntPtr ownerHwnd = default, uint? styleOverride = null)
@@ -5846,7 +5832,76 @@ public abstract class Win32Window : IDisposable
 
         Log.Info($"Window '{_windowTitle}' created with HWND: {_hwnd}");
         IsOpen = true;
+
+        ApplySystemBackdrop();
+
         return true;
+    }
+
+    protected virtual NativeMethods.DWMSBT GetSystemBackdropType()
+    {
+        return NativeMethods.DWMSBT.DWMSBT_NONE;
+    }
+
+    protected void ApplySystemBackdrop()
+    {
+        if (_hwnd == IntPtr.Zero || !IsOpen) return;
+
+        var backdropTypeEnum = GetSystemBackdropType();
+        if (backdropTypeEnum == NativeMethods.DWMSBT.DWMSBT_NONE) return;
+
+        var osVersion = Environment.OSVersion.Version;
+        bool requiresWin1122H2 = backdropTypeEnum != NativeMethods.DWMSBT.DWMSBT_AUTO; // Basic Mica/Acrylic need 22000, specific types need 22621+
+        int requiredBuild = 22621; // Build for Mica Alt, Tabbed, Acrylic
+
+        if (osVersion.Major < 10 || (osVersion.Major == 10 && osVersion.Build < requiredBuild))
+        {
+            Log.Warning($"System backdrop type {backdropTypeEnum} requires Windows 11 Build {requiredBuild} or later. Current: {osVersion}");
+            return;
+        }
+
+        try
+        {
+            // 1. Set Backdrop Type
+            int backdropTypeValue = (int)backdropTypeEnum;
+            int result = NativeMethods.DwmSetWindowAttribute(
+                _hwnd,
+                NativeMethods.DWMWINDOWATTRIBUTE.DWMWA_SYSTEMBACKDROP_TYPE,
+                ref backdropTypeValue,
+                sizeof(int));
+
+            if (result != 0) // S_OK is 0
+            {
+                Log.Error($"DwmSetWindowAttribute failed for {NativeMethods.DWMWINDOWATTRIBUTE.DWMWA_SYSTEMBACKDROP_TYPE} with HRESULT: 0x{result:X8} on HWND {_hwnd} ('{_windowTitle}').");
+                // Don't attempt dark mode if backdrop failed
+                return;
+            }
+            Log.Info($"Applied system backdrop type {backdropTypeEnum} to HWND {_hwnd} ('{_windowTitle}').");
+
+            // 2. Set Dark Mode (Force TRUE for testing)
+            // Requires Windows 10 Build 19041+ for DWMWA_USE_IMMERSIVE_DARK_MODE
+            // Requires Windows 10 Build 22621+ for this specific attribute value (20)
+            int useDarkMode = 1; // 1 = True (Use Dark Mode), 0 = False (Use Light Mode)
+            result = NativeMethods.DwmSetWindowAttribute(
+                _hwnd,
+                NativeMethods.DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ref useDarkMode,
+                sizeof(int));
+
+            if (result != 0)
+            {
+                // This might fail on slightly older Win11 builds, but backdrop might still work. Log as warning.
+                Log.Warning($"DwmSetWindowAttribute failed for {NativeMethods.DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE} with HRESULT: 0x{result:X8} on HWND {_hwnd} ('{_windowTitle}'). This might be expected on some builds.");
+            }
+            else
+            {
+                Log.Info($"Applied {NativeMethods.DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE}=TRUE to HWND {_hwnd} ('{_windowTitle}').");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Exception applying system backdrop/theme attributes to HWND {_hwnd} ('{_windowTitle}'): {ex.Message}");
+        }
     }
 
     public virtual void ShowWindow()
@@ -5870,10 +5925,8 @@ public abstract class Win32Window : IDisposable
             return false;
         }
 
-
         return Initialize();
     }
-
 
     private static IntPtr WindowProcedure(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
@@ -5889,7 +5942,6 @@ public abstract class Win32Window : IDisposable
                 if (window != null)
                 {
                     NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, GCHandle.ToIntPtr(handle));
-                    Log.Info($"WM_NCCREATE: Associated instance with HWND {hWnd}");
                 }
                 else
                 {
@@ -5913,15 +5965,9 @@ public abstract class Win32Window : IDisposable
                     {
                         window = handle.Target as Win32Window;
                     }
-                    else
-                    {
-
-                    }
                 }
                 catch (InvalidOperationException)
                 {
-                    Log.Warning($"WindowProcedure: Invalid GCHandle {ptr} retrieved for HWND {hWnd}, Msg={msg}. Resetting GWLP_USERDATA.");
-
                     NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
                 }
                 catch (Exception ex)
@@ -5942,20 +5988,14 @@ public abstract class Win32Window : IDisposable
                 Log.Error($"Error handling message {msg} for HWND {hWnd} ('{window.Title}'): {ex}");
             }
         }
-        else if (msg != NativeMethods.WM_NCCREATE && msg != NativeMethods.WM_NCDESTROY)
-        {
-
-        }
 
         return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
     }
-
 
     protected virtual IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         int xPos = NativeMethods.GET_X_LPARAM(lParam);
         int yPos = NativeMethods.GET_Y_LPARAM(lParam);
-
 
         switch (msg)
         {
@@ -6018,7 +6058,6 @@ public abstract class Win32Window : IDisposable
                 int vkCodeDown = (int)wParam;
                 OnKeyDown(vkCodeDown);
 
-
                 if (vkCodeDown == NativeMethods.VK_ESCAPE && !IsKeyDownHandled(vkCodeDown))
                 {
                     Close();
@@ -6031,6 +6070,11 @@ public abstract class Win32Window : IDisposable
                 OnKeyUp(vkCodeUp);
                 return IntPtr.Zero;
 
+            case NativeMethods.WM_DWMCOMPOSITIONCHANGED:
+                Log.Info($"WM_DWMCOMPOSITIONCHANGED received for {hWnd} ('{Title}'). Reapplying backdrop.");
+                ApplySystemBackdrop();
+                break; // Fall through to DefWindowProc
+
             case NativeMethods.WM_CLOSE:
                 if (OnClose())
                 {
@@ -6041,7 +6085,6 @@ public abstract class Win32Window : IDisposable
             case NativeMethods.WM_DESTROY:
                 Log.Info($"WM_DESTROY for {hWnd} ('{Title}').");
                 OnDestroy();
-
 
                 if (this is MainAppWindow)
                 {
@@ -6071,7 +6114,6 @@ public abstract class Win32Window : IDisposable
                     {
                         Log.Error($"Error freeing GCHandle on NCDESTROY: {ex.Message}");
                     }
-
                     NativeMethods.SetWindowLongPtr(hWnd, NativeMethods.GWLP_USERDATA, IntPtr.Zero);
                 }
 
@@ -6081,11 +6123,10 @@ public abstract class Win32Window : IDisposable
                 }
                 _hwnd = IntPtr.Zero;
                 IsOpen = false;
-                return IntPtr.Zero;
-
-            default:
-                return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
+                break; // Fall through to DefWindowProc
         }
+
+        return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
     public void Close()
@@ -6105,7 +6146,6 @@ public abstract class Win32Window : IDisposable
         }
     }
 
-
     protected abstract bool Initialize();
     public abstract void RenderFrame();
     protected virtual void OnSize(int width, int height) { }
@@ -6119,7 +6159,6 @@ public abstract class Win32Window : IDisposable
     protected virtual bool OnClose() { return true; }
     protected virtual void OnDestroy() { }
     protected abstract void Cleanup();
-
 
     public void Dispose()
     {
@@ -6141,14 +6180,10 @@ public abstract class Win32Window : IDisposable
             if (_hwnd != IntPtr.Zero)
             {
                 Log.Info($"Requesting destroy for window {_hwnd} ('{Title}') during Dispose...");
-
-
-                NativeMethods.DestroyWindow(_hwnd); // Should trigger WM_DESTROY/NC_DESTROY
-
+                NativeMethods.DestroyWindow(_hwnd);
             }
             else
             {
-
                 if (_gcHandle.IsAllocated)
                 {
                     Log.Warning($"Freeing potentially dangling GCHandle for '{Title}' during Dispose (window handle was already zero)...");
@@ -6156,20 +6191,18 @@ public abstract class Win32Window : IDisposable
                 }
             }
 
-
             _isDisposed = true;
-            IsOpen = false; // Ensure state is updated even if called directly
-            Log.Info($"Win32Window '{Title}' disposed.");
+            IsOpen = false;
+            Log.Info($"Win32Window '{Title}' dispose initiated.");
         }
     }
 
     ~Win32Window()
     {
-        Log.Warning($"Win32Window Finalizer called for '{Title}'!");
-        Dispose(false);
+        Log.Warning($"Win32Window Finalizer called for '{Title}'! Ensure Dispose() was called.");
+        Dispose(disposing: false);
     }
 }
-
 
 public enum MouseButton { Left, Right, Middle, XButton1, XButton2 }
 </file>

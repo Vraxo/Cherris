@@ -24,6 +24,7 @@ public abstract class Win32Window : IDisposable
     public int Width { get; protected set; }
     public int Height { get; protected set; }
     public bool IsOpen { get; private set; } = false;
+    public SystemBackdropType BackdropType { get; set; } = SystemBackdropType.None;
 
     protected Win32Window(string title, int width, int height, string className = null)
     {
@@ -106,36 +107,43 @@ public abstract class Win32Window : IDisposable
         Log.Info($"Window '{_windowTitle}' created with HWND: {_hwnd}");
         IsOpen = true;
 
-        ApplySystemBackdrop();
-
         return true;
     }
 
     protected virtual NativeMethods.DWMSBT GetSystemBackdropType()
     {
-        return NativeMethods.DWMSBT.DWMSBT_NONE;
+        return BackdropType switch
+        {
+            SystemBackdropType.Mica => NativeMethods.DWMSBT.DWMSBT_MAINWINDOW,
+            SystemBackdropType.Acrylic => NativeMethods.DWMSBT.DWMSBT_TRANSIENTWINDOW,
+            SystemBackdropType.MicaAlt => NativeMethods.DWMSBT.DWMSBT_TABBEDWINDOW,
+            SystemBackdropType.None => NativeMethods.DWMSBT.DWMSBT_NONE,
+            _ => NativeMethods.DWMSBT.DWMSBT_AUTO
+        };
     }
 
-    protected void ApplySystemBackdrop()
+    public void ApplySystemBackdrop()
     {
         if (_hwnd == IntPtr.Zero || !IsOpen) return;
 
         var backdropTypeEnum = GetSystemBackdropType();
-        if (backdropTypeEnum == NativeMethods.DWMSBT.DWMSBT_NONE) return;
+        if (backdropTypeEnum == NativeMethods.DWMSBT.DWMSBT_NONE)
+        {
+            Log.Info($"Skipping backdrop application for '{Title}' (Type: None).");
+            return;
+        }
 
         var osVersion = Environment.OSVersion.Version;
-        bool requiresWin1122H2 = backdropTypeEnum != NativeMethods.DWMSBT.DWMSBT_AUTO; // Basic Mica/Acrylic need 22000, specific types need 22621+
-        int requiredBuild = 22621; // Build for Mica Alt, Tabbed, Acrylic
+        int requiredBuild = 22621;
 
         if (osVersion.Major < 10 || (osVersion.Major == 10 && osVersion.Build < requiredBuild))
         {
-            Log.Warning($"System backdrop type {backdropTypeEnum} requires Windows 11 Build {requiredBuild} or later. Current: {osVersion}");
+            Log.Warning($"System backdrop type {BackdropType} ({backdropTypeEnum}) requires Windows 11 Build {requiredBuild} or later. Current: {osVersion}");
             return;
         }
 
         try
         {
-            // 1. Set Backdrop Type
             int backdropTypeValue = (int)backdropTypeEnum;
             int result = NativeMethods.DwmSetWindowAttribute(
                 _hwnd,
@@ -143,18 +151,14 @@ public abstract class Win32Window : IDisposable
                 ref backdropTypeValue,
                 sizeof(int));
 
-            if (result != 0) // S_OK is 0
+            if (result != 0)
             {
                 Log.Error($"DwmSetWindowAttribute failed for {NativeMethods.DWMWINDOWATTRIBUTE.DWMWA_SYSTEMBACKDROP_TYPE} with HRESULT: 0x{result:X8} on HWND {_hwnd} ('{_windowTitle}').");
-                // Don't attempt dark mode if backdrop failed
                 return;
             }
-            Log.Info($"Applied system backdrop type {backdropTypeEnum} to HWND {_hwnd} ('{_windowTitle}').");
+            Log.Info($"Applied system backdrop type {BackdropType} ({backdropTypeEnum}) to HWND {_hwnd} ('{_windowTitle}').");
 
-            // 2. Set Dark Mode (Force TRUE for testing)
-            // Requires Windows 10 Build 19041+ for DWMWA_USE_IMMERSIVE_DARK_MODE
-            // Requires Windows 10 Build 22621+ for this specific attribute value (20)
-            int useDarkMode = 1; // 1 = True (Use Dark Mode), 0 = False (Use Light Mode)
+            int useDarkMode = 1;
             result = NativeMethods.DwmSetWindowAttribute(
                 _hwnd,
                 NativeMethods.DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -163,7 +167,6 @@ public abstract class Win32Window : IDisposable
 
             if (result != 0)
             {
-                // This might fail on slightly older Win11 builds, but backdrop might still work. Log as warning.
                 Log.Warning($"DwmSetWindowAttribute failed for {NativeMethods.DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE} with HRESULT: 0x{result:X8} on HWND {_hwnd} ('{_windowTitle}'). This might be expected on some builds.");
             }
             else
@@ -198,7 +201,15 @@ public abstract class Win32Window : IDisposable
             return false;
         }
 
-        return Initialize();
+        ApplySystemBackdrop();
+
+        if (!Initialize())
+        {
+            Log.Error($"Custom initialization failed for '{Title}'.");
+            return false;
+        }
+
+        return true;
     }
 
     private static IntPtr WindowProcedure(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -346,7 +357,7 @@ public abstract class Win32Window : IDisposable
             case NativeMethods.WM_DWMCOMPOSITIONCHANGED:
                 Log.Info($"WM_DWMCOMPOSITIONCHANGED received for {hWnd} ('{Title}'). Reapplying backdrop.");
                 ApplySystemBackdrop();
-                break; // Fall through to DefWindowProc
+                break;
 
             case NativeMethods.WM_CLOSE:
                 if (OnClose())
@@ -396,7 +407,7 @@ public abstract class Win32Window : IDisposable
                 }
                 _hwnd = IntPtr.Zero;
                 IsOpen = false;
-                break; // Fall through to DefWindowProc
+                break;
         }
 
         return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);

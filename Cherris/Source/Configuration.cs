@@ -13,4 +13,5 @@ public class Configuration
     public bool AntiAliasing { get; set; } = true;
     public string MainScenePath { get; set; } = "";
     public string Backend { get; set; } = "Raylib";
+    public SystemBackdropType BackdropType { get; set; } = SystemBackdropType.MicaAlt;
 }

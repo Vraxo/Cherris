@@ -1,6 +1,7 @@
 Node: MainScene::MainScene
 children:
   - Node: ModalWindowNode::W
+    BackdropType: MicaAlt
     children:
     - Node: VideoPlayer::VideoPlayer
       Position: [100, 100]

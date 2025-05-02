@@ -91,7 +91,6 @@ public sealed class ApplicationCore
             return false;
         }
 
-
         return true;
     }
 
@@ -99,24 +98,17 @@ public sealed class ApplicationCore
     {
         while (mainWindow != null && mainWindow.IsOpen)
         {
-
             ProcessSystemMessages();
 
-
-            ClickServer.Instance.Process(); // Still uses global Input
+            ClickServer.Instance.Process();
             SceneTree.Instance.Process();
-
-
 
             mainWindow.RenderFrame();
             RenderSecondaryWindows();
 
-
-            Input.Update(); // Clears previous frame's input state for global Input
-
+            Input.Update();
         }
     }
-
 
     private void ProcessSystemMessages()
     {
@@ -125,15 +117,14 @@ public sealed class ApplicationCore
             if (msg.message == NativeMethods.WM_QUIT)
             {
                 Log.Info("WM_QUIT received, signaling application close.");
-                mainWindow?.Close(); // Signal main window to close if not already
-                break; // Exit message loop processing for this frame
+                mainWindow?.Close();
+                break;
             }
 
             NativeMethods.TranslateMessage(ref msg);
-            NativeMethods.DispatchMessage(ref msg); // Sends to the correct WindowProcedure
+            NativeMethods.DispatchMessage(ref msg);
         }
     }
-
 
     private void RenderSecondaryWindows()
     {
@@ -147,7 +138,6 @@ public sealed class ApplicationCore
             }
             else
             {
-
                 secondaryWindows.Remove(window);
             }
         }
@@ -155,7 +145,6 @@ public sealed class ApplicationCore
 
     private void OnMainWindowClosed()
     {
-
         Log.Info("Main window closed signal received. Closing secondary windows.");
         CloseAllSecondaryWindows();
     }
@@ -174,15 +163,12 @@ public sealed class ApplicationCore
         var windowsToClose = new List<SecondaryWindow>(secondaryWindows);
         foreach (var window in windowsToClose)
         {
-            window.Close(); // Request close
-            // Dispose happens when WM_NCDESTROY is processed
+            window.Close();
         }
-        // Don't Clear() here, let them remove themselves on NCDESTROY
     }
 
     internal void RegisterSecondaryWindow(SecondaryWindow window)
     {
-
         if (!secondaryWindows.Contains(window))
         {
             secondaryWindows.Add(window);
@@ -192,7 +178,6 @@ public sealed class ApplicationCore
 
     internal void UnregisterSecondaryWindow(SecondaryWindow window)
     {
-
         if (secondaryWindows.Remove(window))
         {
             Log.Info($"Unregistered secondary window: {window.Title}");
@@ -304,6 +289,10 @@ public sealed class ApplicationCore
             return;
         }
 
+        if (mainWindow != null)
+        {
+            mainWindow.BackdropType = applicationConfig.BackdropType;
+        }
 
         SetRootNodeFromConfig(applicationConfig.MainScenePath);
     }

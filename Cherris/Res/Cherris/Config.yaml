@@ -9,3 +9,4 @@ ResizableWindow: true
 AntiAliasing: true
 MainScenePath: Res/Main.yaml
 Backend: Raylib
+BackdropType: MicaAlt
