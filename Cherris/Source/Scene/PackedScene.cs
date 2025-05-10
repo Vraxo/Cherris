@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using Cherris.SceneParsing;
 
 namespace Cherris;
 
